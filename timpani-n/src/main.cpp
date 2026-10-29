@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -29,6 +30,7 @@
 #include "gpdata_writer.h"
 #endif
 #include "grpc/node_client.h"
+#include "phase0_prepare.h"
 #ifdef CONFIG_TRACE_BPF_EVENT
 #include "schedstat_monitor.h"
 #endif
@@ -85,9 +87,12 @@ struct RuntimeOptions {
     int orchestrator_port = 50060;
     std::string node_id_override;
     bool enable_plot = false;
+    bool runtime_table_update_phase0 = false;
     bool show_help = false;
     bool show_version = false;
 };
+
+constexpr int kOptRuntimeTableUpdatePhase0 = 0x100;
 
 void print_usage(const char* prog)
 {
@@ -101,6 +106,8 @@ void print_usage(const char* prog)
                  "elsewhere\n"
               << "  -g          Enable gpdata output (<node>.gpdata)\n"
               << "  -s          (compat) accepted\n"
+              << "  --runtime-table-update-phase0\n"
+              << "              Enable the DDR-011 Phase 0 table update path\n"
               << "  -V          Show version information\n"
               << "  -h          Show this help\n";
 }
@@ -120,9 +127,16 @@ bool parse_port(const char* text, int& port_out)
 
 bool parse_runtime_options(int argc, char** argv, RuntimeOptions& options)
 {
+    static const struct option kLongOptions[] = {
+        {"runtime-table-update-phase0", no_argument, nullptr,
+         kOptRuntimeTableUpdatePhase0},
+        {nullptr, 0, nullptr, 0},
+    };
+
     opterr = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "hVn:p:l:P:gs")) != -1) {
+    while ((opt = getopt_long(argc, argv, "hVn:p:l:P:gs", kLongOptions,
+                              nullptr)) != -1) {
         switch (opt) {
             case 'h':
                 options.show_help = true;
@@ -150,10 +164,18 @@ bool parse_runtime_options(int argc, char** argv, RuntimeOptions& options)
             case 's':
                 // Compatibility flag: accepted for legacy launch scripts.
                 break;
+            case kOptRuntimeTableUpdatePhase0:
+                options.runtime_table_update_phase0 = true;
+                break;
             case '?':
             default:
-                std::cerr << "Unknown option: -" << static_cast<char>(optopt)
-                          << std::endl;
+                if (optopt > 0 && optopt < kOptRuntimeTableUpdatePhase0) {
+                    std::cerr << "Unknown option: -"
+                              << static_cast<char>(optopt) << std::endl;
+                } else {
+                    std::cerr << "Unknown option: " << argv[optind - 1]
+                              << std::endl;
+                }
                 return false;
         }
     }
@@ -342,6 +364,10 @@ int main(int argc, char** argv)
         std::cout << "[main] Node ID override: "
                   << runtime_options.node_id_override << std::endl;
     }
+    if (runtime_options.runtime_table_update_phase0) {
+        std::cout << "[main] DDR-011 Phase 0 table update path enabled"
+                  << std::endl;
+    }
     if (runtime_options.enable_plot) {
 #ifdef CONFIG_TRACE_BPF_EVENT
         std::cout << "[main] gpdata output enabled (-g)" << std::endl;
@@ -421,9 +447,26 @@ int main(int argc, char** argv)
         }
 #endif
 
+        // DDR-011 Phase 0 state is owned by the main loop and must outlive
+        // the gRPC reader thread.
+        const bool phase0_enabled = runtime_options.runtime_table_update_phase0;
+        timpani::node::phase0::AttemptSlot phase0_attempt;
+        timpani::node::phase0::ActiveBaseline phase0_active;
+        std::string phase0_node_id;
+        uint64_t phase0_isolated_mask = 0;
+        if (phase0_enabled) {
+            // Validate against the exact node_id reported to Timpani-O.
+            phase0_node_id = resolve_node_id(runtime_options);
+            phase0_isolated_mask =
+                timpani::node::phase0::detect_isolated_cpu_mask();
+            std::cout << "[main] Phase 0 isolated CPU mask: 0x" << std::hex
+                      << phase0_isolated_mask << std::dec << std::endl;
+        }
+
         // Initialize NodeClient (gRPC)
-        timpani::node::NodeClient node_client(orchestrator_endpoint,
-                                              runtime_options.node_id_override);
+        timpani::node::NodeClient node_client(
+            orchestrator_endpoint,
+            phase0_enabled ? phase0_node_id : runtime_options.node_id_override);
 
         // 5. Initialize Timer Master (Time-Triggered / CBS Execution Thread)
         timpani::node::TimerMaster timer_master(bpf_loader);
@@ -435,6 +478,9 @@ int main(int argc, char** argv)
         std::map<std::string, std::vector<uint64_t>> workload_to_cbs_keys;
         std::map<uint64_t, std::string> workload_hash_to_id;
         std::mutex workload_map_mutex;
+        // Serializes full-table apply with recovery eviction. Lock order:
+        // table_apply_mutex, then workload_map_mutex.
+        std::mutex table_apply_mutex;
 
         // Connect callbacks
         node_client.set_shutdown_callback([](uint32_t grace_period_ms) {
@@ -464,10 +510,12 @@ int main(int argc, char** argv)
         //   eviction requires a round-trip through Pullpiri.
         // ===================================================================
         node_client.set_recovery_callback([&timer_master, &bpf_loader, &workload_to_pids, &workload_to_slots, &workload_to_hash, &workload_to_cbs_keys, &workload_hash_to_id, &workload_map_mutex,
+                                           &table_apply_mutex,
                                            &fault_monitor](const auto& recovery_signal) {
             std::cout << "[main] Received recovery signal for workload: " << recovery_signal.workload_id()
                       << " action: " << recovery_signal.action() << std::endl;
             if (recovery_signal.action() == timpani::node::v1::RecoverySignal::ACTION_STOP) {
+                std::lock_guard<std::mutex> apply_lock(table_apply_mutex);
                 std::lock_guard<std::mutex> lock(workload_map_mutex);
                 std::string wid = recovery_signal.workload_id();
                 if (workload_to_pids.find(wid) == workload_to_pids.end()) {
@@ -558,18 +606,21 @@ int main(int argc, char** argv)
         fault_monitor.start();
 
         // Wire table_callback: received HierarchicalScheduleTable → TimerMaster
-        // slots (Re-set callback now that timer_master is in scope)
-        node_client.set_table_callback([&timer_master, &bpf_loader,
-                                        &node_client,
-                                        &runtime_options,
-                                        &workload_to_pids, &workload_to_slots, &workload_to_hash, &workload_to_cbs_keys, &workload_hash_to_id, &workload_map_mutex,
-                                        &fault_monitor
+        // slots (Re-set callback now that timer_master is in scope).
+        // apply_full_table() is the legacy full-table apply; the caller sends
+        // TableApplied with the returned {success, error}.
+        auto apply_full_table =
+            [&timer_master, &bpf_loader, &runtime_options, &workload_to_pids,
+             &workload_to_slots, &workload_to_hash, &workload_to_cbs_keys,
+             &workload_hash_to_id, &workload_map_mutex, &table_apply_mutex,
+             &fault_monitor
 #ifdef CONFIG_TRACE_BPF_EVENT
-                                        ,
-                                        &schedstat_monitor, &gpdata_pid_to_task,
-                                        &gpdata_pid_map_mutex
+             ,
+             &schedstat_monitor, &gpdata_pid_to_task, &gpdata_pid_map_mutex
 #endif
-        ](const auto& table) {
+        ](const timpani::node::v1::HierarchicalScheduleTable& table,
+            bool reset_evicted_affinity) -> std::pair<bool, std::string> {
+            std::lock_guard<std::mutex> apply_lock(table_apply_mutex);
             std::cout << "[main] Received table: " << table.table_id()
                       << " hyperperiod=" << table.hyperperiod_us() << "us"
                       << " partitions=" << table.partitions_size() << std::endl;
@@ -601,7 +652,11 @@ int main(int argc, char** argv)
                             CPU_SET(i, &full_mask);
                         }
                         for (pid_t pid : pids) {
-                            sched_setaffinity(pid, sizeof(full_mask), &full_mask);
+                            // Phase 0 keeps OS affinity (D-P0-07).
+                            if (reset_evicted_affinity) {
+                                sched_setaffinity(pid, sizeof(full_mask),
+                                                  &full_mask);
+                            }
                             bpf_loader.delete_task_meta(pid);
                             std::cout << "[main] Evicted PID " << pid << " from Time-Triggered / CBS Execution Domain." << std::endl;
                         }
@@ -921,16 +976,94 @@ int main(int argc, char** argv)
             std::cout << "[main] TimerMaster table updated: " << slots.size()
                       << " slots, hyperperiod=" << hyperperiod_us << "us"
                       << std::endl;
-            node_client.send_table_applied(table.table_id(), apply_success,
-                                           apply_error);
-        });
+            return {apply_success, apply_error};
+        };
+
+        // Phase 0 attempt on the main non-RT loop: pre-check, then hand the
+        // prepared table to the legacy apply path until P0-T03..T06 land.
+        auto run_phase0_attempt =
+            [&phase0_active, &phase0_node_id, &phase0_isolated_mask,
+             &apply_full_table](
+                const timpani::node::v1::HierarchicalScheduleTable& table)
+            -> std::pair<bool, std::string> {
+            namespace phase0 = timpani::node::phase0;
+            phase0::NodeEnvironment env;
+            env.node_id = phase0_node_id;
+            env.isolated_cpu_mask = phase0_isolated_mask;
+            env.now_ns = phase0::realtime_now_ns();
+            env.resolve_pids = phase0::scan_proc_pids;
+            if (!phase0::read_shm_generation(env.shm_generation)) {
+                return {false, "SHM generation unavailable"};
+            }
+
+            phase0::NPrepared prepared;
+            std::string error;
+            if (!phase0::prepare_table(table, phase0_active, env, prepared,
+                                       error)) {
+                std::cerr << "[main] Phase 0 rejected table "
+                          << table.table_id() << ": " << error << std::endl;
+                return {false, error};
+            }
+            std::cout << "[main] Phase 0 prepared table " << prepared.table_id
+                      << ": slots=" << prepared.slots.size()
+                      << " tasks=" << prepared.tasks.size()
+                      << " removed_tasks=" << prepared.removed_tasks.size()
+                      << " boundary_k=" << prepared.boundary.index
+                      << " target_ns=" << prepared.boundary.target_ns
+                      << " shm_generation=" << prepared.shm.base_generation
+                      << "->" << prepared.shm.next_generation << std::endl;
+
+            // Interim handoff: the legacy path still applies immediately. It is
+            // not transactional and replaces the old state even on failure, so
+            // the baseline follows the prepared table either way.
+            auto result = apply_full_table(table, false);
+            phase0_active = phase0::baseline_from(prepared);
+            return result;
+        };
+
+        if (!phase0_enabled) {
+            node_client.set_table_callback(
+                [&node_client, &apply_full_table](const auto& table) {
+                    const auto result = apply_full_table(table, true);
+                    node_client.send_table_applied(table.table_id(),
+                                                   result.first, result.second);
+                });
+        } else {
+            node_client.set_table_callback([&node_client, &phase0_attempt](
+                                               const auto& table) {
+                if (!phase0_attempt.offer(table)) {
+                    node_client.send_table_applied(table.table_id(), false,
+                                                   "busy: update in progress");
+                }
+            });
+            node_client.set_update_callback([&node_client](const auto& update) {
+                node_client.send_table_applied(
+                    update.table_id(), false,
+                    "delta update is outside Phase 0");
+            });
+        }
 
         timer_master.start();
         node_client.connect();
 
-        // Daemon simply waits for shutdown signal
-        while (!g_shutdown) {
-            sleep(1);
+        if (!phase0_enabled) {
+            // Daemon simply waits for shutdown signal
+            while (!g_shutdown) {
+                sleep(1);
+            }
+        } else {
+            timpani::node::v1::HierarchicalScheduleTable phase0_table;
+            while (!g_shutdown) {
+                if (!phase0_attempt.wait_take(phase0_table,
+                                              std::chrono::milliseconds(500))) {
+                    continue;
+                }
+                const auto result = run_phase0_attempt(phase0_table);
+                // Clear busy before ACK so the next request is not rejected.
+                phase0_attempt.finish();
+                node_client.send_table_applied(phase0_table.table_id(),
+                                               result.first, result.second);
+            }
         }
 
         std::cout << "\nShutting down..." << std::endl;

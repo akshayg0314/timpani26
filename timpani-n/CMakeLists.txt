@@ -54,6 +54,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # BPF build option
 option(CONFIG_TRACE_BPF "Enable eBPF sched_ext scheduler" ON)
 option(CONFIG_TRACE_BPF_EVENT "Enable eBPF schedstat tracing for gpdata output" OFF)
+option(BUILD_TESTS "Build unit tests" OFF)
 set(TIMPANI_KERNEL_BTF_FILE "/sys/kernel/btf/vmlinux" CACHE FILEPATH
     "BTF ELF file for the kernel targeted by the sched_ext BPF build")
 set(TIMPANI_SCX_API "AUTO" CACHE STRING
@@ -229,6 +230,7 @@ set(TIMPANI_N_SOURCES
     src/bpf_loader.cpp
     src/fault_monitor.cpp
     src/task_registry.cpp
+    src/phase0_prepare.cpp
     src/grpc/node_client.cpp
     ${NODE_CONTROL_PROTO_SRC}
     ${NODE_CONTROL_GRPC_SRC}
@@ -272,6 +274,35 @@ target_include_directories(timpani-n
     PUBLIC ${CMAKE_SOURCE_DIR}/src
     PUBLIC ${CMAKE_BINARY_DIR}
 )
+
+# Unit tests. Defined here, not in a subdirectory, so they can reuse the
+# generated node_control protobuf sources. They need neither BPF nor gRPC.
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(GTest REQUIRED)
+
+    add_executable(test_phase0_prepare
+        tests/test_phase0_prepare.cpp
+        src/phase0_prepare.cpp
+        ${NODE_CONTROL_PROTO_SRC}
+    )
+    target_include_directories(test_phase0_prepare PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}
+    )
+    target_link_libraries(test_phase0_prepare
+        GTest::gtest
+        GTest::gtest_main
+        protobuf::libprotobuf
+        pthread
+    )
+    if(NOT APPLE)
+        target_link_libraries(test_phase0_prepare rt)
+    endif()
+
+    add_test(NAME Phase0PrepareTest COMMAND test_phase0_prepare)
+    set_tests_properties(Phase0PrepareTest PROPERTIES TIMEOUT 30)
+endif()
 
     # ============================================================================
     # Installation

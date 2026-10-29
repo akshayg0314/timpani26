@@ -142,6 +142,7 @@ cmake -DGIT_COMMIT_HASH=$GIT_HASH .. && make
 | `CONFIG_TRACE_BPF` | ON | Enable eBPF sched_ext scheduler |
 | `CONFIG_TRACE_EVENT` | ON | Enable ftrace for sched/timer events |
 | `CONFIG_TRACE_BPF_EVENT` | OFF | Track sched_switch/waking events |
+| `BUILD_TESTS` | OFF | Build host unit tests (no BPF or target needed) |
 | `TIMPANI_KERNEL_BTF_FILE` | `/sys/kernel/btf/vmlinux` | Target kernel BTF ELF used for API detection and `vmlinux.h` generation |
 | `TIMPANI_SCX_API` | `AUTO` | Select `AUTO`, `LEGACY`, or `DSQ` sched_ext kfunc family |
 
@@ -156,6 +157,19 @@ helper sets and the build should prefer one of them.
 # Disable BPF (fallback to timer-only mode)
 cmake -DCONFIG_TRACE_BPF=OFF ..
 ```
+
+### Unit Tests
+
+The DDR-011 Phase 0 pre-check tests (`test_phase0_prepare`) build without
+BPF, so they can run on a development host:
+
+```bash
+cmake -S . -B build-tests -DCONFIG_TRACE_BPF=OFF -DBUILD_TESTS=ON
+cmake --build build-tests --target test_phase0_prepare
+cd build-tests && ctest --output-on-failure
+```
+
+These tests do not cover BPF, SHM, `/proc`, or cgroup behavior on the target.
 
 ### Cross-compilation (ARM64)
 
@@ -296,9 +310,35 @@ Usage: timpani-n [options] [orchestrator_host]
 Options:
   -n <name>   Node ID override (default: hostname)
   -p <port>   Orchestrator gRPC port (default: 50060)
+  --runtime-table-update-phase0
+              Enable the DDR-011 Phase 0 table update path
   -V          Print version, Git commit, and build timestamp
   -h          Show help
 ```
+
+`--runtime-table-update-phase0` is opt-in and should be paired with the same
+flag on timpani-o. Without it, the existing table path is unchanged. With it,
+timpani-n:
+
+- checks each full table on the main non-RT loop before touching active state
+  (node ID, fixed epoch and hyperperiod, one isolated CPU, TT only, slot range,
+  ID/hash consistency, a single live PID per task, at most 32 tasks and 2048
+  slots) and rejects a failing table with `TableApplied(success=false)`;
+- preserves each retained workload's complete slot multiset (task identity,
+  offset, duration, deadline, CPU, current limit, layer and repetition count).
+  Changes are rejected before PID resolution or legacy apply. Snapshot order
+  and slot ordinals may change; adding/removing whole workloads and CLEAR
+  remain supported;
+- rejects a full table that arrives while another is in progress (`busy`) and
+  every delta `update` command;
+- leaves the OS CPU affinity of removed tasks unchanged.
+
+Accepted tables currently still go through the existing apply path. The
+boundary-aligned switch and publication of the prepared SHM image are not
+implemented yet. Legacy apply is not transactional: a failure can leave partial
+changes, and the N comparison baseline follows the prepared table even then.
+Such failures are not side-effect-free pre-check rejections or successful
+activation. P0-T03..T06 and Linux target validation are still required.
 
 **Example:**
 ```bash
