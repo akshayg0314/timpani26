@@ -200,6 +200,7 @@ make test
 ./tests/test_fault_client
 ./tests/test_global_scheduler
 ./tests/test_node_config
+./tests/test_runtime_table_update
 ```
 
 **Test prerequisites:**
@@ -210,6 +211,57 @@ sudo apt install -y libgtest-dev
 # CentOS
 sudo dnf install -y gtest-devel
 ```
+
+---
+
+## Opt-in Phase 0 runtime table updates
+
+The default path is unchanged: CBS, multiple nodes and the existing replay/retry
+behavior remain available. Enable the separate Phase 0 path explicitly:
+
+```bash
+# Edit the node ID and isolated CPU in this example before a target trial.
+./build/timpani-o --runtime-table-update-phase0 -c examples/phase0_node.yaml
+```
+
+Phase 0 requires one configured node, one already isolated CPU, L1 TT only,
+and an ACK-confirmed fixed epoch/hyperperiod. It does not configure OS affinity.
+Connect N and pre-register trial processes before submitting the baseline.
+
+- `AddSchedInfo.status=0` means candidate acceptance, not application. The
+  existing non-RT main loop sends the candidate once through `full_table`.
+- Normal `RemoveWorkload` submits a removal candidate. REPLACE/CLEAR use private
+  O test/control helpers, not new RPCs. All four operations use O's generator.
+- Confirmed inputs and tables change only after a matching successful
+  `(node_id, table_id)` ACK. `GetScheduleTables` exposes confirmed tables only.
+  Generation failure and a matching negative ACK leave them unchanged.
+- Only one attempt is retained, including while awaiting its first connection.
+  Further requests are rejected immediately; no queue, merge, retry or replay.
+- ADD/REMOVE preserve retained slots. Generated H mismatches are rejected,
+  never fixed by overwriting H. CLEAR preserves E/H and later ADD must regenerate
+  the same H with all repetitions.
+- Limits: 32 unique tasks, 2048 slots, ASCII workload/task IDs of 1..15 bytes.
+  CBS, MODIFY, multiple nodes/CPUs, changed E/H/CPU and reused task identities
+  across workloads are outside Phase 0.
+- Write failure, disconnect, unexpected ACK or recovery STOP stops subsequent
+  submissions until an externally re-established fresh trial. Existing fault
+  reporting and STOP forwarding stay enabled; STOP preserves the last confirmed
+  O model rather than pretending to complete a normal REMOVE.
+
+The two opt-in C++ connection methods are `SchedInfoServer::EnablePhase0` and
+`PushPendingTables`. Enable before either gRPC server starts; the orchestrator
+must outlive the SchedInfo server. No existing public method, proto or SHM ABI is
+removed or changed. Default container/Compose configuration is unchanged.
+
+Run the focused suite with
+`ctest --test-dir build -R '^RuntimeTableUpdateTest$' --output-on-failure`.
+It uses the plan's W1/W2/W3 fixture and real local gRPC streams/ACKs, and checks
+both opt-in invariants and default CBS/delta behavior.
+
+**This is P0-T01 (O-side) only.** Current N does not yet verify actual boundary
+completion before sending its ACK. Host/mock-node results do not prove BPF/SHM
+activation; P0-T02..T06 and Linux target evidence are still required.
+See the [Phase 0 plan](../doc/design/DDR-011-runtime-table-update-phase0/implementation_plan.md).
 
 ---
 
@@ -233,4 +285,3 @@ podman login sdv.lge.com
 podman tag timpani-o:latest sdv.lge.com/timpani/timpani-o:v0.1.0
 podman push sdv.lge.com/timpani/timpani-o:v0.1.0
 ```
-

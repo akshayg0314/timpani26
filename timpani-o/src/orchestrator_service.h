@@ -6,9 +6,12 @@
 #include <grpcpp/grpcpp.h>
 #include "proto/node_control.grpc.pb.h"
 #include <map>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
+
+class SchedInfoServer;
 
 namespace timpani {
 namespace orchestrator {
@@ -30,6 +33,11 @@ public:
     std::vector<std::string> get_connected_node_ids();
 
 private:
+    friend class ::SchedInfoServer;
+
+    std::string phase0_node_id_;
+    std::function<void(const std::string&, const TableApplied&)> phase0_ack_;
+    std::function<void(const std::string&)> phase0_abort_;
     struct ConnectedNode {
         std::string node_id;
         grpc::ServerReaderWriter<ControlCommand, NodeEvent>* stream;
