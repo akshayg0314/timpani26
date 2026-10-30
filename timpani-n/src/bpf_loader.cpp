@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 #include "bpf_loader.h"
+#include "phase0_prepare.h"
 #include <dirent.h>
+#include <cerrno>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
@@ -201,34 +205,58 @@ void BpfLoader::unload_programs() {
     }
 }
 
+int BpfLoader::tt_table_fd() const {
+    if (!skel_) return -1;
+    return bpf_map__fd(active_map_idx_ == 0 ? skel_->maps.tt_table_map_0
+                                             : skel_->maps.tt_table_map_1);
+}
+
+int BpfLoader::cbs_fd() const {
+    if (!skel_) return -1;
+    return bpf_map__fd(active_map_idx_ == 0 ? skel_->maps.cbs_map_0
+                                             : skel_->maps.cbs_map_1);
+}
+
+int BpfLoader::task_meta_fd() const {
+    if (!skel_) return -1;
+    return bpf_map__fd(active_map_idx_ == 0 ? skel_->maps.task_meta_map_0
+                                             : skel_->maps.task_meta_map_1);
+}
+
 bool BpfLoader::update_tt_slot(const TtSlotKey& key, const TtSlotBpf& slot) {
-    if (!skel_) return false;
-    return bpf_map_update_elem(bpf_map__fd(skel_->maps.tt_table_map), &key, &slot, BPF_ANY) == 0;
+    int fd = tt_table_fd();
+    if (fd < 0) return false;
+    return bpf_map_update_elem(fd, &key, &slot, BPF_ANY) == 0;
 }
 
 bool BpfLoader::update_cbs_state(uint64_t hash, const CbsState& state) {
-    if (!skel_) return false;
-    return bpf_map_update_elem(bpf_map__fd(skel_->maps.cbs_map), &hash, &state, BPF_ANY) == 0;
+    int fd = cbs_fd();
+    if (fd < 0) return false;
+    return bpf_map_update_elem(fd, &hash, &state, BPF_ANY) == 0;
 }
 
 bool BpfLoader::update_task_meta(uint32_t pid, const TaskMeta& meta) {
-    if (!skel_) return false;
-    return bpf_map_update_elem(bpf_map__fd(skel_->maps.task_meta_map), &pid, &meta, BPF_ANY) == 0;
+    int fd = task_meta_fd();
+    if (fd < 0) return false;
+    return bpf_map_update_elem(fd, &pid, &meta, BPF_ANY) == 0;
 }
 
 bool BpfLoader::delete_task_meta(uint32_t pid) {
-    if (!skel_) return false;
-    return bpf_map_delete_elem(bpf_map__fd(skel_->maps.task_meta_map), &pid) == 0;
+    int fd = task_meta_fd();
+    if (fd < 0) return false;
+    return bpf_map_delete_elem(fd, &pid) == 0;
 }
 
 bool BpfLoader::delete_tt_slot(const TtSlotKey& key) {
-    if (!skel_) return false;
-    return bpf_map_delete_elem(bpf_map__fd(skel_->maps.tt_table_map), &key) == 0;
+    int fd = tt_table_fd();
+    if (fd < 0) return false;
+    return bpf_map_delete_elem(fd, &key) == 0;
 }
 
 bool BpfLoader::delete_cbs_state(uint64_t hash) {
-    if (!skel_) return false;
-    return bpf_map_delete_elem(bpf_map__fd(skel_->maps.cbs_map), &hash) == 0;
+    int fd = cbs_fd();
+    if (fd < 0) return false;
+    return bpf_map_delete_elem(fd, &hash) == 0;
 }
 
 bool BpfLoader::update_current_slot(uint32_t cpu, uint32_t slot_idx) {
@@ -258,9 +286,137 @@ int BpfLoader::get_shadow_map_idx() const {
     return 1 - active_map_idx_;
 }
 
+bool BpfLoader::clear_bank(int bank) {
+    if (!skel_) return false;
+    bank = clamp_bank(bank);
+
+    struct {
+        struct bpf_map* map;
+        size_t key_size;
+    } maps[3] = {
+        {bank == 0 ? skel_->maps.tt_table_map_0 : skel_->maps.tt_table_map_1,
+         sizeof(TtSlotKey)},
+        {bank == 0 ? skel_->maps.cbs_map_0 : skel_->maps.cbs_map_1,
+         sizeof(uint64_t)},
+        {bank == 0 ? skel_->maps.task_meta_map_0 : skel_->maps.task_meta_map_1,
+         sizeof(uint32_t)},
+    };
+
+    for (const auto& m : maps) {
+        int fd = bpf_map__fd(m.map);
+        if (fd < 0) return false;
+        std::vector<uint8_t> key(m.key_size, 0);
+        std::vector<uint8_t> next(m.key_size, 0);
+        // Walk every entry and delete it. bpf_map_get_next_key() returns
+        // -ENOENT when the walk is exhausted.
+        int ret = bpf_map_get_next_key(fd, nullptr, next.data());
+        while (ret == 0) {
+            std::swap(key, next);
+            if (bpf_map_delete_elem(fd, key.data()) != 0) {
+                return false;  // cleanup failure: bank left dirty
+            }
+            ret = bpf_map_get_next_key(fd, key.data(), next.data());
+        }
+        if (ret != -ENOENT) return false;
+    }
+    return true;
+}
+
+bool BpfLoader::stage_table(const phase0::NPrepared& prepared) {
+    if (!skel_) return false;
+
+    int shadow = get_shadow_map_idx();
+    // The shadow bank must have no in-flight BPF references before it is
+    // cleared; otherwise a running callback could read a half-written bank.
+    if (skel_->bss->kernel_control.bank_active_refs[shadow] != 0) {
+        return false;
+    }
+    if (!clear_bank(shadow)) return false;
+
+    int tt_fd = bpf_map__fd(shadow == 0 ? skel_->maps.tt_table_map_0
+                                        : skel_->maps.tt_table_map_1);
+    int meta_fd = bpf_map__fd(shadow == 0 ? skel_->maps.task_meta_map_0
+                                           : skel_->maps.task_meta_map_1);
+    int cbs_fd = bpf_map__fd(shadow == 0 ? skel_->maps.cbs_map_0
+                                          : skel_->maps.cbs_map_1);
+    if (tt_fd < 0 || meta_fd < 0 || cbs_fd < 0) {
+        clear_bank(shadow);
+        return false;
+    }
+
+    // TT slots: staged inactive (tt_runnable = 0, activation_ns = 0) so the
+    // bank is inert until apply_table_update() switches the active index.
+    for (const auto& slot : prepared.slots) {
+        TtSlotKey key = {.cpu = slot.cpu, .slot_idx = slot.slot_idx};
+        TtSlotBpf bpf_slot = {};
+        bpf_slot.workload_id_hash = slot.workload_id_hash;
+        bpf_slot.task_id_hash = slot.task_id_hash;
+        bpf_slot.offset_us = slot.offset_us;
+        bpf_slot.duration_us = slot.duration_us;
+        bpf_slot.deadline_us = slot.deadline_us;
+        bpf_slot.cpu = slot.cpu;
+        if (bpf_map_update_elem(tt_fd, &key, &bpf_slot, BPF_ANY) != 0) {
+            clear_bank(shadow);  // discard partial candidate, no residual
+            return false;
+        }
+    }
+
+    // TaskMeta: one entry per prepared task, keyed by PID. Staged inactive
+    // (tt_runnable = 0, activation_ns = 0) so the bank is inert until
+    // apply_table_update() switches the active index.
+    std::map<uint64_t, const phase0::PreparedSlot*> slot_by_task;
+    for (const auto& slot : prepared.slots) {
+        slot_by_task.emplace(slot.task_id_hash, &slot);
+    }
+    for (const auto& [task_hash, task] : prepared.tasks) {
+        if (task.pid < 0) {
+            clear_bank(shadow);
+            return false;
+        }
+        TaskMeta meta = {};
+        meta.workload_id_hash = task.workload_id_hash;
+        meta.task_id_hash = task_hash;
+        meta.assigned_cpu = prepared.has_cpu ? prepared.cpu : 0;
+        meta.scheduling_type = SCHED_TYPE_TT;
+        meta.tt_runnable = 0;
+        meta.activation_ns = 0;
+        auto it = slot_by_task.find(task_hash);
+        if (it != slot_by_task.end()) {
+            meta.slot_duration_us = it->second->duration_us;
+            meta.layer = static_cast<uint8_t>(it->second->layer_index);
+        }
+        uint32_t pid = static_cast<uint32_t>(task.pid);
+        if (bpf_map_update_elem(meta_fd, &pid, &meta, BPF_ANY) != 0) {
+            clear_bank(shadow);
+            return false;
+        }
+    }
+
+    // CBS states: Phase 0 candidates never contain CBS entries (rejected at
+    // the P0-T02 pre-check), so the shadow bank's CBS map is cleared and
+    // left empty. CBS staging is deferred to a later phase.
+
+    return true;
+}
+
 void BpfLoader::apply_table_update() {
+    if (!skel_) return;
+    int old = active_map_idx_;
     swap_shadow_maps();
-    // TODO: Write active_map_idx_ to BPF map (e.g. active_config_map)
+    // Single handover step in kernel .bss: raise the gate, flip the active
+    // bank, release the gate. BPF callbacks read the bank once per callback,
+    // so the flip is atomic with respect to them.
+    apply_handover(&skel_->bss->kernel_control, active_map_idx_);
+    cleanup_old_bank(old);
+}
+
+void BpfLoader::cleanup_old_bank(int old_bank) {
+    if (!skel_) return;
+    old_bank = clamp_bank(old_bank);
+    // Only clean once no BPF callback still references the old bank.
+    if (skel_->bss->kernel_control.bank_active_refs[old_bank] == 0) {
+        clear_bank(old_bank);
+    }
 }
 
 } // namespace node

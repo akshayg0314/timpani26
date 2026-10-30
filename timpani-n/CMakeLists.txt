@@ -302,6 +302,24 @@ if(BUILD_TESTS)
 
     add_test(NAME Phase0PrepareTest COMMAND test_phase0_prepare)
     set_tests_properties(Phase0PrepareTest PROPERTIES TIMEOUT 30)
+
+    # P0-T03: bank routing / handover / staging state machine. Header-only
+    # free functions, so no BPF, libbpf, or protobuf dependency.
+    add_executable(test_bpf_loader
+        tests/test_bpf_loader.cpp
+    )
+    target_include_directories(test_bpf_loader PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}
+    )
+    target_link_libraries(test_bpf_loader
+        GTest::gtest
+        GTest::gtest_main
+        pthread
+    )
+
+    add_test(NAME BpfLoaderBankTest COMMAND test_bpf_loader)
+    set_tests_properties(BpfLoaderBankTest PROPERTIES TIMEOUT 30)
 endif()
 
     # ============================================================================
