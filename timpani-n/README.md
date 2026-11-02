@@ -169,11 +169,12 @@ development host:
 | `test_bpf_loader` | TT bank routing, handover, and staging helpers (P0-T03) |
 | `test_libttsched` | `/timpani_ttsched` even/odd generation publication and libttsched wake rules (P0-T05) |
 | `test_phase0_handover` | Boundary handover between the coordinator and the resident RT engine, and the SHM image written during the TT-free window (P0-T04) |
+| `test_phase0_attempt` | One Phase 0 attempt on the main loop: the checks and old-bank cleanup before a successful `TableApplied`, rejections without side effects, and trial failures (P0-T06) |
 
 ```bash
 cmake -S . -B build-tests -DCONFIG_TRACE_BPF=OFF -DBUILD_TESTS=ON
 cmake --build build-tests --target test_phase0_prepare test_bpf_loader \
-    test_libttsched test_phase0_handover
+    test_libttsched test_phase0_handover test_phase0_attempt
 cd build-tests && ctest --output-on-failure
 ```
 
@@ -181,7 +182,8 @@ These tests do not cover BPF, `/proc`, or cgroup behavior on the target.
 `test_libttsched` uses in-process memory and a scripted wait instead of the
 real SHM object and futex. `test_phase0_handover` simulates time and the
 kernel operations; it does not exercise the real gate, BPF references, or RT
-latency. Memory ordering must still be verified on the target.
+latency. `test_phase0_attempt` replaces TimerMaster, BPF, SHM and FaultMonitor
+with a fake. Memory ordering must still be verified on the target.
 `test_bpf_loader` needs `<linux/types.h>` (a Linux host or a header shim).
 
 ### Cross-compilation (ARM64)
@@ -339,22 +341,35 @@ timpani-n:
   slots) and rejects a failing table with `TableApplied(success=false)`;
 - preserves each retained workload's complete slot multiset (task identity,
   offset, duration, deadline, CPU, current limit, layer and repetition count).
-  Changes are rejected before PID resolution or legacy apply. Snapshot order
+  Changes are rejected before PID resolution or staging. Snapshot order
   and slot ordinals may change; adding/removing whole workloads and CLEAR
   remain supported;
 - rejects a full table that arrives while another is in progress (`busy`) and
   every delta `update` command;
 - leaves the OS CPU affinity of removed tasks unchanged.
 
-Accepted tables currently still go through the existing apply path.
-TimerMaster already contains the boundary-aligned handover
-(`enable_phase0()`, `apply_phase0_table()`; P0-T04): a resident RT thread
-switches tables at a future `T = E + kH` after the old slots end, and the
-prepared SHM image is published there. The Phase 0 attempt path does not use
-it until P0-T06. Legacy apply is not transactional: a failure can leave partial
-changes, and the N comparison baseline follows the prepared table even then.
-Such failures are not side-effect-free pre-check rejections or successful
-activation. P0-T06 and Linux target validation are still required.
+An accepted table is staged in the inactive BPF bank. The resident RT thread
+of TimerMaster switches to it at a future boundary `T = E + kH`, after the old
+slots end, and publishes the prepared SHM image there. timpani-n sends
+`TableApplied(success=true)` only after all of the following:
+
+- the active bank changed, the published even SHM generation is visible, and
+  the actual apply time is not before `T`;
+- the old bank was cleared once BPF stopped referencing it (retried every 1 ms
+  for up to 100 ms);
+- workload tracking was rebuilt and FaultMonitor was reset with the new
+  limits.
+
+A rejection before any active change returns `success=false` with the reason.
+A failure after the handover started is not acknowledged and the previous
+table is not restored. timpani-n logs `result=trial_failed` and disconnects,
+and timpani-o stops the trial. Restart timpani-n before the next trial. Each
+attempt logs one `[RTU-P0]` line with `node_id`, `table_id`,
+`added_workloads`, `removed_workloads`, `planned_boundary_ns`,
+`actual_apply_ns`, `active_bank`, `shm_gen` and `result`/`reason`. The `-g`
+gpdata output does not follow Phase 0 table changes. Linux target validation
+is still required; see the
+[Phase 0 plan](../doc/design/DDR-011-runtime-table-update-phase0/implementation_plan.md).
 
 **Example:**
 ```bash

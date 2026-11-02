@@ -258,10 +258,28 @@ Run the focused suite with
 It uses the plan's W1/W2/W3 fixture and real local gRPC streams/ACKs, and checks
 both opt-in invariants and default CBS/delta behavior.
 
-**This is P0-T01 (O-side) only.** Current N does not yet verify actual boundary
-completion before sending its ACK. Host/mock-node results do not prove BPF/SHM
-activation; P0-T02..T06 and Linux target evidence are still required.
-See the [Phase 0 plan](../doc/design/DDR-011-runtime-table-update-phase0/implementation_plan.md).
+`test_phase0_e2e` is the target E2E driver (P0-T06). It acts as timpani-o for
+one real timpani-n and runs the plan's REPLACE, ADD, REMOVE, CLEAR, rejection
+and busy sequence through `full_table`. CTest reports it as skipped unless
+`TIMPANI_P0_E2E=1` is set:
+
+```bash
+TIMPANI_P0_E2E=1 ./build/tests/test_phase0_e2e
+```
+
+The driver listens on `TIMPANI_P0_E2E_PORT` (default 50060) and loads
+`TIMPANI_P0_E2E_NODE_CONFIG` (default `examples/phase0_node.yaml`). It waits up
+to `TIMPANI_P0_E2E_CONNECT_S` (60) seconds for the node and up to
+`TIMPANI_P0_E2E_ACK_TIMEOUT_S` (10) seconds for each ACK. It runs
+`TIMPANI_P0_E2E_ROUNDS` (3) rounds. Start the sample apps and
+`timpani-n --runtime-table-update-phase0` first, and restart timpani-n before
+each run. See §5.4 of the
+[Phase 0 plan](../doc/design/DDR-011-runtime-table-update-phase0/implementation_plan.md)
+for the target procedure and the evidence to collect.
+
+timpani-n acknowledges a table only after the boundary switch and the old-state
+cleanup (P0-T06). Host and mock-node results do not prove BPF/SHM activation;
+Linux target evidence is still required.
 
 ---
 

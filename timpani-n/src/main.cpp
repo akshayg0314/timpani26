@@ -30,6 +30,7 @@
 #include "gpdata_writer.h"
 #endif
 #include "grpc/node_client.h"
+#include "phase0_attempt.h"
 #include "phase0_prepare.h"
 #ifdef CONFIG_TRACE_BPF_EVENT
 #include "schedstat_monitor.h"
@@ -618,8 +619,8 @@ int main(int argc, char** argv)
              ,
              &schedstat_monitor, &gpdata_pid_to_task, &gpdata_pid_map_mutex
 #endif
-        ](const timpani::node::v1::HierarchicalScheduleTable& table,
-            bool reset_evicted_affinity) -> std::pair<bool, std::string> {
+        ](const timpani::node::v1::HierarchicalScheduleTable& table)
+            -> std::pair<bool, std::string> {
             std::lock_guard<std::mutex> apply_lock(table_apply_mutex);
             std::cout << "[main] Received table: " << table.table_id()
                       << " hyperperiod=" << table.hyperperiod_us() << "us"
@@ -652,11 +653,7 @@ int main(int argc, char** argv)
                             CPU_SET(i, &full_mask);
                         }
                         for (pid_t pid : pids) {
-                            // Phase 0 keeps OS affinity (D-P0-07).
-                            if (reset_evicted_affinity) {
-                                sched_setaffinity(pid, sizeof(full_mask),
-                                                  &full_mask);
-                            }
+                            sched_setaffinity(pid, sizeof(full_mask), &full_mask);
                             bpf_loader.delete_task_meta(pid);
                             std::cout << "[main] Evicted PID " << pid << " from Time-Triggered / CBS Execution Domain." << std::endl;
                         }
@@ -979,13 +976,123 @@ int main(int argc, char** argv)
             return {apply_success, apply_error};
         };
 
-        // Phase 0 attempt on the main non-RT loop: pre-check, then hand the
-        // prepared table to the legacy apply path until P0-T03..T06 land.
+        // DDR-011 Phase 0 (L-P0-06) side effects of one attempt, used only by
+        // the main non-RT loop. Removed tasks keep their affinity and policy.
+        class Phase0Port final : public timpani::node::phase0::AttemptPort
+        {
+          public:
+            Phase0Port(timpani::node::TimerMaster& timer,
+                       timpani::node::BpfLoader& bpf,
+                       timpani::node::FaultMonitor& faults,
+                       std::mutex& map_mutex,
+                       std::map<std::string, std::vector<pid_t>>& pids,
+                       std::map<std::string, std::vector<TtSlotKey>>& slots,
+                       std::map<std::string, uint64_t>& hashes,
+                       std::map<std::string, std::vector<uint64_t>>& cbs_keys,
+                       std::map<uint64_t, std::string>& ids)
+                : timer_(timer),
+                  bpf_(bpf),
+                  faults_(faults),
+                  map_mutex_(map_mutex),
+                  pids_(pids),
+                  slots_(slots),
+                  hashes_(hashes),
+                  cbs_keys_(cbs_keys),
+                  ids_(ids)
+            {
+            }
+
+            uint64_t now_ns() override
+            {
+                return timpani::node::phase0::realtime_now_ns();
+            }
+            void sleep_until(uint64_t ns) override
+            {
+                struct timespec ts;
+                ts.tv_sec = static_cast<time_t>(ns / 1000000000ULL);
+                ts.tv_nsec = static_cast<long>(ns % 1000000000ULL);
+                while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &ts,
+                                       nullptr) == EINTR) {
+                }
+            }
+            int active_bank() override
+            {
+                ::KernelControl* control = bpf_.kernel_control();
+                if (!control) return -1;
+                return static_cast<int>(
+                    __atomic_load_n(&control->active_bank_idx,
+                                    __ATOMIC_SEQ_CST) &
+                    1u);
+            }
+            bool apply(const timpani::node::phase0::NPrepared& prepared,
+                       timpani::node::phase0::ApplyResult& result) override
+            {
+                return timer_.apply_phase0_table(prepared, result);
+            }
+            bool shm_state(uint32_t& generation, bool& magic_valid) override
+            {
+                return timpani::node::phase0::read_shm_state(generation,
+                                                             magic_valid);
+            }
+            bool clear_inactive_bank() override
+            {
+                // Staging an empty table clears the inactive (old) bank.
+                return bpf_.stage_table(timpani::node::phase0::NPrepared());
+            }
+            void update_tracking(
+                const timpani::node::phase0::NPrepared& prepared) override
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                pids_.clear();
+                slots_.clear();
+                hashes_.clear();
+                cbs_keys_.clear();
+                ids_.clear();
+                for (const auto& item : prepared.tasks) {
+                    const auto& task = item.second;
+                    pids_[task.workload_id].push_back(task.pid);
+                    hashes_[task.workload_id] = task.workload_id_hash;
+                    ids_[task.workload_id_hash] = task.workload_id;
+                }
+                for (const auto& slot : prepared.slots) {
+                    const auto id =
+                        prepared.workloads.find(slot.workload_id_hash);
+                    if (id != prepared.workloads.end()) {
+                        slots_[id->second].push_back(
+                            TtSlotKey{slot.cpu, slot.slot_idx});
+                    }
+                }
+            }
+            void reset_faults(
+                const timpani::node::phase0::FaultLimits& limits) override
+            {
+                faults_.clear_state();
+                faults_.update_current_limits(limits);
+            }
+
+          private:
+            timpani::node::TimerMaster& timer_;
+            timpani::node::BpfLoader& bpf_;
+            timpani::node::FaultMonitor& faults_;
+            std::mutex& map_mutex_;
+            std::map<std::string, std::vector<pid_t>>& pids_;
+            std::map<std::string, std::vector<TtSlotKey>>& slots_;
+            std::map<std::string, uint64_t>& hashes_;
+            std::map<std::string, std::vector<uint64_t>>& cbs_keys_;
+            std::map<uint64_t, std::string>& ids_;
+        };
+        Phase0Port phase0_port(timer_master, bpf_loader, fault_monitor,
+                               workload_map_mutex, workload_to_pids,
+                               workload_to_slots, workload_to_hash,
+                               workload_to_cbs_keys, workload_hash_to_id);
+
+        // Phase 0 attempt on the main non-RT loop: pre-check, boundary
+        // handover, completion checks and cleanup before the ACK decision.
         auto run_phase0_attempt =
             [&phase0_active, &phase0_node_id, &phase0_isolated_mask,
-             &apply_full_table](
+             &phase0_port](
                 const timpani::node::v1::HierarchicalScheduleTable& table)
-            -> std::pair<bool, std::string> {
+            -> timpani::node::phase0::AttemptResult {
             namespace phase0 = timpani::node::phase0;
             phase0::NodeEnvironment env;
             env.node_id = phase0_node_id;
@@ -993,38 +1100,17 @@ int main(int argc, char** argv)
             env.now_ns = phase0::realtime_now_ns();
             env.resolve_pids = phase0::scan_proc_pids;
             if (!phase0::read_shm_generation(env.shm_generation)) {
-                return {false, "SHM generation unavailable"};
+                return phase0::rejected_attempt(phase0_node_id,
+                                                table.table_id(),
+                                                "SHM generation unavailable");
             }
-
-            phase0::NPrepared prepared;
-            std::string error;
-            if (!phase0::prepare_table(table, phase0_active, env, prepared,
-                                       error)) {
-                std::cerr << "[main] Phase 0 rejected table "
-                          << table.table_id() << ": " << error << std::endl;
-                return {false, error};
-            }
-            std::cout << "[main] Phase 0 prepared table " << prepared.table_id
-                      << ": slots=" << prepared.slots.size()
-                      << " tasks=" << prepared.tasks.size()
-                      << " removed_tasks=" << prepared.removed_tasks.size()
-                      << " boundary_k=" << prepared.boundary.index
-                      << " target_ns=" << prepared.boundary.target_ns
-                      << " shm_generation=" << prepared.shm.base_generation
-                      << "->" << prepared.shm.next_generation << std::endl;
-
-            // Interim handoff: the legacy path still applies immediately. It is
-            // not transactional and replaces the old state even on failure, so
-            // the baseline follows the prepared table either way.
-            auto result = apply_full_table(table, false);
-            phase0_active = phase0::baseline_from(prepared);
-            return result;
+            return phase0::run_attempt(table, env, phase0_active, phase0_port);
         };
 
         if (!phase0_enabled) {
             node_client.set_table_callback(
                 [&node_client, &apply_full_table](const auto& table) {
-                    const auto result = apply_full_table(table, true);
+                    const auto result = apply_full_table(table);
                     node_client.send_table_applied(table.table_id(),
                                                    result.first, result.second);
                 });
@@ -1043,6 +1129,11 @@ int main(int argc, char** argv)
             });
         }
 
+        if (phase0_enabled && !timer_master.enable_phase0()) {
+            std::cerr << "[main] Failed to enable the Phase 0 timer mode"
+                      << std::endl;
+            return 1;
+        }
         timer_master.start();
         node_client.connect();
 
@@ -1052,17 +1143,32 @@ int main(int argc, char** argv)
                 sleep(1);
             }
         } else {
+            namespace phase0 = timpani::node::phase0;
             timpani::node::v1::HierarchicalScheduleTable phase0_table;
             while (!g_shutdown) {
                 if (!phase0_attempt.wait_take(phase0_table,
                                               std::chrono::milliseconds(500))) {
                     continue;
                 }
-                const auto result = run_phase0_attempt(phase0_table);
+                const phase0::AttemptResult result =
+                    run_phase0_attempt(phase0_table);
+                const bool applied =
+                    result.outcome == phase0::AttemptOutcome::kApplied;
+                (applied ? std::cout : std::cerr) << result.log << std::endl;
+                if (result.outcome == phase0::AttemptOutcome::kTrialFailed) {
+                    // Neither ACK nor restore after the handover started.
+                    // The attempt stays busy and Timpani-O stops the trial on
+                    // the disconnect (L-P0-06).
+                    node_client.disconnect();
+                    break;
+                }
                 // Clear busy before ACK so the next request is not rejected.
                 phase0_attempt.finish();
                 node_client.send_table_applied(phase0_table.table_id(),
-                                               result.first, result.second);
+                                               applied, result.reason);
+            }
+            while (!g_shutdown) {
+                sleep(1);
             }
         }
 

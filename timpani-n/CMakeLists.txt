@@ -232,6 +232,7 @@ set(TIMPANI_N_SOURCES
     src/task_registry.cpp
     src/phase0_prepare.cpp
     src/phase0_handover.cpp
+    src/phase0_attempt.cpp
     src/grpc/node_client.cpp
     ${NODE_CONTROL_PROTO_SRC}
     ${NODE_CONTROL_GRPC_SRC}
@@ -356,6 +357,31 @@ if(BUILD_TESTS)
 
     add_test(NAME Phase0HandoverTest COMMAND test_phase0_handover)
     set_tests_properties(Phase0HandoverTest PROPERTIES TIMEOUT 60)
+
+    # P0-T06: one attempt on the main non-RT loop and its ACK decision.
+    # TimerMaster, BPF, SHM and FaultMonitor access is injected.
+    add_executable(test_phase0_attempt
+        tests/test_phase0_attempt.cpp
+        src/phase0_attempt.cpp
+        src/phase0_prepare.cpp
+        ${NODE_CONTROL_PROTO_SRC}
+    )
+    target_include_directories(test_phase0_attempt PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}
+    )
+    target_link_libraries(test_phase0_attempt
+        GTest::gtest
+        GTest::gtest_main
+        protobuf::libprotobuf
+        pthread
+    )
+    if(NOT APPLE)
+        target_link_libraries(test_phase0_attempt rt)
+    endif()
+
+    add_test(NAME Phase0AttemptTest COMMAND test_phase0_attempt)
+    set_tests_properties(Phase0AttemptTest PROPERTIES TIMEOUT 30)
 endif()
 
     # ============================================================================
