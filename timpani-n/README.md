@@ -160,16 +160,27 @@ cmake -DCONFIG_TRACE_BPF=OFF ..
 
 ### Unit Tests
 
-The DDR-011 Phase 0 pre-check tests (`test_phase0_prepare`) build without
-BPF, so they can run on a development host:
+The DDR-011 Phase 0 host tests build without BPF, so they can run on a
+development host:
+
+| Test | Covers |
+|------|--------|
+| `test_phase0_prepare` | Table pre-checks and `NPrepared` assembly (P0-T02) |
+| `test_bpf_loader` | TT bank routing, handover, and staging helpers (P0-T03) |
+| `test_libttsched` | `/timpani_ttsched` even/odd generation publication and libttsched wake rules (P0-T05) |
 
 ```bash
 cmake -S . -B build-tests -DCONFIG_TRACE_BPF=OFF -DBUILD_TESTS=ON
-cmake --build build-tests --target test_phase0_prepare
+cmake --build build-tests --target test_phase0_prepare test_bpf_loader \
+    test_libttsched
 cd build-tests && ctest --output-on-failure
 ```
 
-These tests do not cover BPF, SHM, `/proc`, or cgroup behavior on the target.
+These tests do not cover BPF, `/proc`, or cgroup behavior on the target.
+`test_libttsched` uses in-process memory and a scripted wait instead of the
+real SHM object and futex. Memory ordering must still be verified on the
+target. `test_bpf_loader` needs `<linux/types.h>` (a Linux host or a header
+shim).
 
 ### Cross-compilation (ARM64)
 

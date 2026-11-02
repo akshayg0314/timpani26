@@ -320,6 +320,20 @@ if(BUILD_TESTS)
 
     add_test(NAME BpfLoaderBankTest COMMAND test_bpf_loader)
     set_tests_properties(BpfLoaderBankTest PROPERTIES TIMEOUT 30)
+
+    # P0-T05: /timpani_ttsched publication protocol shared by TimerMaster and
+    # libttsched. Header-only, so no futex, BPF, or protobuf dependency.
+    add_executable(test_libttsched
+        tests/test_libttsched.cpp
+    )
+    target_link_libraries(test_libttsched
+        GTest::gtest
+        GTest::gtest_main
+        pthread
+    )
+
+    add_test(NAME TtschedShmTest COMMAND test_libttsched)
+    set_tests_properties(TtschedShmTest PROPERTIES TIMEOUT 30)
 endif()
 
     # ============================================================================

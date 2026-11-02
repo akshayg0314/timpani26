@@ -23,6 +23,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../../sample-apps/src/ttsched_shm.h"
+
 namespace timpani {
 namespace node {
 
@@ -47,10 +49,9 @@ TimerMaster::TimerMaster(BpfLoader& bpf_loader)
             ttsched_shm_ = nullptr;
             std::cerr << "[TimerMaster] shm mmap failed" << std::endl;
         } else {
-            /* Initialize: magic=0 (not ready), n_tasks=0, generation=1 */
-            ttsched_shm_->magic = 0;
-            ttsched_shm_->n_tasks = 0;
-            ttsched_shm_->generation = 1;
+            /* Not ready (magic=0, n_tasks=0) with an even, stable generation
+             * above any value left in a reused object (DDR-011 D-P0-05). */
+            ttsched_shm_reset(ttsched_shm_);
             std::cout << "[TimerMaster] shm /timpani_ttsched created"
                       << std::endl;
         }
@@ -105,9 +106,9 @@ void TimerMaster::set_schedule_table(const std::vector<SlotEntry>& slots,
     /* Publish per-task SHM slots for targeted wake.
      * Collect unique tasks (same task may appear in multiple slots). */
     if (ttsched_shm_) {
-        /* Clear ready flag first so tasks don't read a half-written table */
-        ttsched_shm_->magic = 0;
-        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        /* Odd generation and magic=0 mark the update in progress so tasks
+         * never use a half-written table (DDR-011 D-P0-05). */
+        const uint32_t publishing = ttsched_shm_begin_publish(ttsched_shm_);
 
         /* Wake all tasks currently waiting on SHM slots so they notice magic == 0
          * and re-initialize their slot indices when the new schedule table is published. */
@@ -132,9 +133,8 @@ void TimerMaster::set_schedule_table(const std::vector<SlotEntry>& slots,
                 uint32_t idx = it->second;
                 task_hash_to_shm_idx_[entry.task_id_hash] = idx;
                 used_slots[idx] = true;
-                strncpy(const_cast<char*>(ttsched_shm_->tasks[idx].name),
-                        entry.task_name.c_str(), 15);
-                ttsched_shm_->tasks[idx].name[15] = '\0';
+                ttsched_shm_store_name(ttsched_shm_, idx,
+                                       entry.task_name.c_str());
             }
         }
 
@@ -154,10 +154,8 @@ void TimerMaster::set_schedule_table(const std::vector<SlotEntry>& slots,
 
             used_slots[idx] = true;
             task_hash_to_shm_idx_[entry.task_id_hash] = idx;
-            strncpy(const_cast<char*>(ttsched_shm_->tasks[idx].name),
-                    entry.task_name.c_str(), 15);
-            ttsched_shm_->tasks[idx].name[15] = '\0';
-            ttsched_shm_->tasks[idx].counter = 0;
+            ttsched_shm_store_name(ttsched_shm_, idx, entry.task_name.c_str());
+            ttsched_shm_store_counter(ttsched_shm_, idx, 0);
         }
 
         uint32_t total_slots = 0;
@@ -171,17 +169,14 @@ void TimerMaster::set_schedule_table(const std::vector<SlotEntry>& slots,
                       << std::endl;
         }
 
-        /* Publish atomically: first n_tasks and generation, then magic */
-        __atomic_store_n(const_cast<uint32_t*>(&ttsched_shm_->n_tasks),
-                         total_slots, __ATOMIC_RELEASE);
-        __atomic_fetch_add(const_cast<uint32_t*>(&ttsched_shm_->generation),
-                           1u, __ATOMIC_RELEASE);
-        __atomic_store_n(const_cast<uint32_t*>(&ttsched_shm_->magic),
-                         TIMPANI_TTSCHED_MAGIC, __ATOMIC_RELEASE);
+        /* Publish n_tasks, then the next even generation and magic */
+        ttsched_shm_store_n_tasks(ttsched_shm_, total_slots);
+        const uint32_t generation =
+            ttsched_shm_end_publish(ttsched_shm_, publishing);
 
         std::cout << "[TimerMaster] SHM published: " << total_slots
-                  << " task slots ready (gen=" << ttsched_shm_->generation
-                  << ")" << std::endl;
+                  << " task slots ready (gen=" << generation << ")"
+                  << std::endl;
     }
 
     table_pending_ = true;  // signal existing threads to exit
