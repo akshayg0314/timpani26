@@ -231,6 +231,7 @@ set(TIMPANI_N_SOURCES
     src/fault_monitor.cpp
     src/task_registry.cpp
     src/phase0_prepare.cpp
+    src/phase0_handover.cpp
     src/grpc/node_client.cpp
     ${NODE_CONTROL_PROTO_SRC}
     ${NODE_CONTROL_GRPC_SRC}
@@ -334,6 +335,27 @@ if(BUILD_TESTS)
 
     add_test(NAME TtschedShmTest COMMAND test_libttsched)
     set_tests_properties(TtschedShmTest PROPERTIES TIMEOUT 30)
+
+    # P0-T04: boundary handover between the coordinator and the resident RT
+    # engine, and the SHM writer. Kernel and clock access are injected.
+    add_executable(test_phase0_handover
+        tests/test_phase0_handover.cpp
+        src/phase0_handover.cpp
+        ${NODE_CONTROL_PROTO_SRC}
+    )
+    target_include_directories(test_phase0_handover PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}
+    )
+    target_link_libraries(test_phase0_handover
+        GTest::gtest
+        GTest::gtest_main
+        protobuf::libprotobuf
+        pthread
+    )
+
+    add_test(NAME Phase0HandoverTest COMMAND test_phase0_handover)
+    set_tests_properties(Phase0HandoverTest PROPERTIES TIMEOUT 60)
 endif()
 
     # ============================================================================

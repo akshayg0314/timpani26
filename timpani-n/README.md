@@ -168,19 +168,21 @@ development host:
 | `test_phase0_prepare` | Table pre-checks and `NPrepared` assembly (P0-T02) |
 | `test_bpf_loader` | TT bank routing, handover, and staging helpers (P0-T03) |
 | `test_libttsched` | `/timpani_ttsched` even/odd generation publication and libttsched wake rules (P0-T05) |
+| `test_phase0_handover` | Boundary handover between the coordinator and the resident RT engine, and the SHM image written during the TT-free window (P0-T04) |
 
 ```bash
 cmake -S . -B build-tests -DCONFIG_TRACE_BPF=OFF -DBUILD_TESTS=ON
 cmake --build build-tests --target test_phase0_prepare test_bpf_loader \
-    test_libttsched
+    test_libttsched test_phase0_handover
 cd build-tests && ctest --output-on-failure
 ```
 
 These tests do not cover BPF, `/proc`, or cgroup behavior on the target.
 `test_libttsched` uses in-process memory and a scripted wait instead of the
-real SHM object and futex. Memory ordering must still be verified on the
-target. `test_bpf_loader` needs `<linux/types.h>` (a Linux host or a header
-shim).
+real SHM object and futex. `test_phase0_handover` simulates time and the
+kernel operations; it does not exercise the real gate, BPF references, or RT
+latency. Memory ordering must still be verified on the target.
+`test_bpf_loader` needs `<linux/types.h>` (a Linux host or a header shim).
 
 ### Cross-compilation (ARM64)
 
@@ -344,12 +346,15 @@ timpani-n:
   every delta `update` command;
 - leaves the OS CPU affinity of removed tasks unchanged.
 
-Accepted tables currently still go through the existing apply path. The
-boundary-aligned switch and publication of the prepared SHM image are not
-implemented yet. Legacy apply is not transactional: a failure can leave partial
+Accepted tables currently still go through the existing apply path.
+TimerMaster already contains the boundary-aligned handover
+(`enable_phase0()`, `apply_phase0_table()`; P0-T04): a resident RT thread
+switches tables at a future `T = E + kH` after the old slots end, and the
+prepared SHM image is published there. The Phase 0 attempt path does not use
+it until P0-T06. Legacy apply is not transactional: a failure can leave partial
 changes, and the N comparison baseline follows the prepared table even then.
 Such failures are not side-effect-free pre-check rejections or successful
-activation. P0-T03..T06 and Linux target validation are still required.
+activation. P0-T06 and Linux target validation are still required.
 
 **Example:**
 ```bash

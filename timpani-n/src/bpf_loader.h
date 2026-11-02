@@ -98,6 +98,17 @@ public:
     // apply_table_update() at the boundary to switch the active bank.
     bool stage_table(const phase0::NPrepared& prepared);
 
+    // P0-T04: the shared .bss control area (handover gate, active bank,
+    // per-bank references); nullptr before load_programs(). Access the
+    // fields with __atomic builtins.
+    ::KernelControl* kernel_control();
+    // P0-T04: tt_runnable_count_map[cpu]. Non-RT (map lookup syscall).
+    bool tt_runnable_count(uint32_t cpu, uint32_t& count) const;
+    // P0-T04: make the staged (shadow) bank active in the kernel and in the
+    // userspace mirror without touching tt_handover_gate. Non-RT; the
+    // caller keeps the gate closed until the boundary.
+    bool select_staged_bank();
+
 private:
     // P0-T03: bank-routed FD accessors (route by the active bank).
     int tt_table_fd() const;

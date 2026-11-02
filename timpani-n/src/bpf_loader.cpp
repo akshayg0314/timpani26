@@ -419,5 +419,25 @@ void BpfLoader::cleanup_old_bank(int old_bank) {
     }
 }
 
+::KernelControl* BpfLoader::kernel_control() {
+    if (!skel_ || !skel_->bss) return nullptr;
+    return &skel_->bss->kernel_control;
+}
+
+bool BpfLoader::tt_runnable_count(uint32_t cpu, uint32_t& count) const {
+    if (!skel_) return false;
+    int fd = bpf_map__fd(skel_->maps.tt_runnable_count_map);
+    if (fd < 0) return false;
+    return bpf_map_lookup_elem(fd, &cpu, &count) == 0;
+}
+
+bool BpfLoader::select_staged_bank() {
+    if (!skel_ || !skel_->bss) return false;
+    swap_shadow_maps();
+    __atomic_store_n(&skel_->bss->kernel_control.active_bank_idx,
+                     static_cast<uint32_t>(active_map_idx_), __ATOMIC_SEQ_CST);
+    return true;
+}
+
 } // namespace node
 } // namespace timpani
