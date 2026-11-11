@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 
 **상태:** 사용자와 합의한 P1 수정 방향. 상세 설계·API·구현 방식은 후속 검토 대상.
 
-**기준:** `9209bc5`의 008 설계에 대한 변경 요구를 기록한다. 정본 REQ/SRS/DDR/HLD/LLD 전체에 반영 완료된 상태는 아니다.
+**기준:** `9209bc5`의 008 설계에 대한 변경 요구를 기록한다. 정본 REQ/SRS/DDR/HLD/LLD의 반영 상태는 맨 아래 "정식 문서 반영 상태 (2026-11-11)" 절을 본다.
 
 **추적:** [기능 지원 Issue #53](https://github.com/eclipse-timpani/timpani26/issues/53). 설계 Draft PR은 검토용이며, 설계 병합만으로 기능 구현·검증 완료를 의미하거나 기능 Issue를 종료하지 않는다.
 
@@ -89,3 +89,23 @@ SPDX-License-Identifier: MIT
 - 큐 게시·통지·수락 거절 경합과 재시작 경계에서 다른 Event의 데이터를 처리하지 않는다.
 - 이전 등록의 타이머·완료·종료 정보가 새 등록 상태를 변경하지 않는다.
 - SOME/IP FCW와 비-SOME/IP 앱이 같은 계약을 사용하고, 한 앱의 폭주·과실행 시 다른 앱에 대한 간섭을 보완된 승인 기준으로 확인한다.
+
+## 정식 문서 반영 상태 (2026-11-11)
+
+이 절은 위 §5의 변경 대상이 정식 문서의 어디에 반영되었는지 기록한다. 설계 단계의 기록이며, 구현이나 검증이 끝났다는 뜻이 아니다. 수치는 모두 후보값이다. §1~§6의 합의 내용은 이 절에서 바뀌지 않는다.
+
+| 문서 | 버전 | 반영 상태 | 반영 위치 |
+|:--|:--|:--|:--|
+| [REQ-008](REQ-008-event-driven-workload-support.md) | v5 | 계약 반영 | §2.3~2.5 생명주기·불변식·마감 규칙, §4.1 MOD-009·010·011, §4.2 DET-007, §4.4 PRT-008·009, §4.6 TIM-009~011, §4.7 IF-007, §4.9 OBS-004, §5 AC-008-13~16. A-04 철회, A-06 정확성 전제 해제(변경 이력 v5) |
+| [SRS-008](SRS-008-event-driven-workload-support.md) | v4 | 계약 반영 | §3.10 FR-L-009~012, §3.5 FR-N-027~031, §3.7 FR-B-024, §3.0 FR-G-003, §4 TMG-014~016, §5.3 IF-L-004. REQ 신규 ID의 대응은 §8.1·§8.2 추적성 매트릭스. 제약 C-08(게시 맥락 하나)·C-09(SHM 쓰기 주체 신뢰)는 SRS-008 §7과 추적성 매트릭스(§8.1), REQ-008 §8에 반영되었다 |
+| [DDR-008](DDR-008-event-driven-workload-support.md) | v2 | 계약 반영 | D-01·02·03·04·05·09·10·11·14·16·17 개정, D-07·D-08은 용어와 스레드 정합만 보완(D-02 BPF 실행 구간 관측, D-03 API·SHM, D-04 예산과 Job, D-05 MIT, D-09 승인식, D-10 결함, D-11 proto와 `job_gen`, D-16 기록, D-17 세대). 신규 D-18 한 Event–한 Job, D-19 공통 Event 큐, D-20 마감 감지, D-21 예산 전용 클래스. F-3·F-8은 철회 표시와 대체 항목 지시. 폐기된 대안은 D-03·D-19 등의 대안 표에 기록 |
+| [HLD-008](HLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §3.2 TIMPANI-N(DeadlineMonitor), §3.4 libttsched v2, §3.6 승인식, §4.2 정상 Event→Job, §4.4 도달 중 연속 Job, §4.7~4.8 마감 감지, §4.9 큐 넘침, §4.10 비활성·재등록, §4.11 데몬 재시작, §6.2~6.5 데이터 뷰와 proto 제안, §8 적용 방법(§8.4 FCW, §8.5 비-SOME/IP 예제), §10 오픈 이슈 |
+| [LLD-008](LLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §2 proto 제안, §3.3 승인 파이프라인, §4 BPF(실행 구간 관측), §5.4 수집기, §5.5 계수·상세 경로, §5.6 SHM v2·활성화·닫기·시작 정리, §5.9 DeadlineMonitor, §6 libttsched v2(API·스케치·인터리빙·한계·테스트), §7 샘플 앱, §8 타이밍, §9 실패 모드, §10 수용 기준 매핑, §11 WBS, §12 오픈 이슈 |
+
+### 남은 열린 항목
+
+- **수치 바운드(후보, 미합의):** 감지 지연 2 ms 이하, 보고 지연 200 ms 이하, $L_{post}$ 50 µs, $L_{del}^{max}$ 100 µs, `tol` 50 µs, `tol_mit` 0, $\delta_{ovr}$ 1 틱, QDEPTH 8, payload 64 B, DeadlineMonitor 우선순위 97(Replenisher 98), 주기 1 ms, 대기 back-off 10 ms, SHM 후보 64 슬롯 이하 256 KiB(REQ §11 OI-18~OI-19).
+- **승인 필요:** 공개 API(libttsched v2와 v1 ABI 변경), SHM v2 레이아웃, protobuf 필드(`FaultInfo`의 `count`·`flags`·`job_gen` 추가). TIMPANI-N 내부 인터페이스 변경(TaskRegistry의 바인딩 세대 전달, BPF TaskMeta와 종료 기록의 `bind_gen`)도 승인 대상이다(LLD-008 L-12). 미승인 시 보고는 횟수만 담는다(DDR D-11, LLD §2, HLD §6.4).
+- **확인할 해석 두 가지:** (1) 완료 시각은 워커가 종료 전이 직전에 읽은 시각이며, 경합 시 재읽기로 판정하고 기록된 `t_end`로 판정한다. (2) TIMPANI가 `t_dl` 이전에 닫은 Job(CANCELLED, ABANDONED)은 실패가 아니다. 두 해석은 DDR 열린 이슈와 REQ 오픈 이슈에 함께 올린다.
+- **예제 설정과 정책 결정:** FCW 예제의 CBS 주기 변경(20 ms → 18 ms)과 동시 구동 구성의 파라미터(HLD-008 §8.5, H-15), 마감을 놓친 Job을 계속 처리할지 취소할지의 정책(DDR-008 D-20), 임계 규칙(`max_dmiss`)에 따라 보고하지 않는 실패의 취급.
+- **PoC와 Linux 타깃 측정:** DeadlineMonitor 스캔 비용과 1 kHz 지터(TT 부하 포함), 이벤트 기반 깨움의 필요성(F-10), syscall 기반 BPF 재스케줄, 유휴 CPU 보충 지연, $L_{post}$·`tol`·$\delta_{ovr}$(HZ와 nohz_full) 측정, post·wait·done 비용, FCW와 비-SOME/IP 앱의 동시 구동과 승인 파라미터(AC-008-16).
