@@ -6,6 +6,7 @@
 #ifndef SCHEDINFO_SERVICE_H
 #define SCHEDINFO_SERVICE_H
 
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -44,7 +45,8 @@ class SchedInfoServiceImpl final : public SchedInfoService::Service
 
     /**
      * @brief Remove a workload from the schedule and regenerate.
-     * In Phase 0, true means submitted, not applied; recovery STOP stops the trial.
+     * In Phase 0, true means submitted, not applied; false (recovery STOP) returns
+     * true only after the correlated TableApplied confirms the removal.
      * @param workload_id The ID of the workload to remove.
      * @return true if workload was found and removed, false otherwise.
      */
@@ -86,6 +88,8 @@ class SchedInfoServiceImpl final : public SchedInfoService::Service
         uint64_t next_table_id = 1;
         bool changed = false;
         bool stopped = false;
+        // Notified when an attempt settles (ACK or abort); recovery STOP waits on it.
+        std::condition_variable settled;
     };
     std::shared_ptr<Phase0State> phase0_;
 
@@ -149,6 +153,7 @@ class SchedInfoServer
     void PushPendingTables();
 
     bool RemoveWorkload(const std::string& workload_id, std::string* resolved_id = nullptr, bool trigger_push = true) { return service_.RemoveWorkload(workload_id, resolved_id, trigger_push); }
+    bool Phase0Enabled() const { return phase0_orchestrator_ != nullptr; }
 
     ScheduleTableMap GetScheduleTables(bool* changed = nullptr);
     void DumpSchedInfo();

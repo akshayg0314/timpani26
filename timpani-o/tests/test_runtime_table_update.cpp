@@ -574,23 +574,45 @@ TEST_F(Phase0Test, ChangedConfigurationIsRejected)
     EXPECT_EQ(Confirmed().SerializeAsString(), before);
 }
 
-TEST_F(Phase0Test, RecoveryStopRetainsConfirmedModelAndForwarding)
+TEST_F(Phase0Test, RecoveryStopRepliesAfterCorrelatedRemoveAck)
+{
+    Seed();
+    const auto before = Confirmed();
+    EXPECT_FALSE(server_->RemoveWorkload("0xnot-a-hash", nullptr, false));
+    std::string resolved;
+    auto stop = std::async(std::launch::async, [&] {
+        return server_->RemoveWorkload(
+            std::to_string(GlobalScheduler::fnv1a_hash("W2")), &resolved, false);
+    });
+    ASSERT_TRUE(wait_until([&] { return Phase0TestPeer::Pending(Service()); }));
+    // The next command is the replacement table, not a RecoverySignal.
+    const auto removed = Send();
+    EXPECT_TRUE(slots(removed, "W2").empty());
+    EXPECT_EQ(slots(removed, "W1"), slots(before, "W1"));
+    EXPECT_EQ(stop.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+    Ack(removed);
+    EXPECT_TRUE(stop.get());
+    EXPECT_EQ(resolved, "W2");
+    EXPECT_EQ(Confirmed().SerializeAsString(), removed.SerializeAsString());
+    EXPECT_FALSE(Phase0TestPeer::Stopped(Service()));
+    EXPECT_EQ(Add(w3()), 0);
+}
+
+TEST_F(Phase0Test, RecoveryStopFailsWithoutConfirmedRemoval)
 {
     Seed();
     const auto before = Confirmed().SerializeAsString();
-    EXPECT_FALSE(server_->RemoveWorkload("0xnot-a-hash"));
-    std::string resolved;
-    EXPECT_TRUE(server_->RemoveWorkload(
-        std::to_string(GlobalScheduler::fnv1a_hash("W1")), &resolved, false));
-    EXPECT_EQ(resolved, "W1");
+    auto stop = std::async(std::launch::async, [&] {
+        return server_->RemoveWorkload("W2", nullptr, false);
+    });
+    ASSERT_TRUE(wait_until([&] { return Phase0TestPeer::Pending(Service()); }));
+    Ack(Send(), false);
+    EXPECT_FALSE(stop.get());
     EXPECT_EQ(Confirmed().SerializeAsString(), before);
-    EXPECT_EQ(Add(w3()), -1);
-    ASSERT_TRUE(orchestrator_.broadcast_recovery_signal(
-        resolved, timpani::node::v1::RecoverySignal::ACTION_STOP));
-    timpani::node::v1::ControlCommand command;
-    ASSERT_TRUE(stream_->Read(&command));
-    ASSERT_TRUE(command.has_recovery());
-    EXPECT_EQ(command.recovery().workload_id(), "W1");
+    // Removing W1 would move W2's slot: rejected before any table is sent.
+    EXPECT_FALSE(server_->RemoveWorkload("W1", nullptr, false));
+    EXPECT_FALSE(Phase0TestPeer::Pending(Service()));
+    EXPECT_EQ(Confirmed().SerializeAsString(), before);
 }
 
 TEST_F(Phase0Test, DeltaPathIsRejectedOnlyInPhase0)

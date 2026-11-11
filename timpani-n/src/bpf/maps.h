@@ -94,7 +94,10 @@ struct FaultEvent {
 struct KernelControl {
     volatile __u32 active_bank_idx;
     volatile __u32 tt_handover_gate;
-    volatile __u32 bank_active_refs[2];
+    /* 64-bit: the BPF target has no 32-bit atomic patterns, so the
+     * __sync_fetch_and_add/sub in the banked-map lookup helpers
+     * require a 64-bit operand (clang -target bpf crashes on s32). */
+    volatile __u64 bank_active_refs[2];
 };
 
 #ifdef __cplusplus

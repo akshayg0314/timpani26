@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <limits>
 #include <tuple>
 
@@ -17,6 +18,8 @@ namespace {
 // Effective Phase 0 limits: N's TT map and libttsched's task array.
 constexpr size_t kMaxTtSlots = 2048;
 constexpr size_t kMaxTasks = 32;
+// SRS-011 REQ-RTU-F-032 default ACK wait; bounds the recovery STOP reply.
+constexpr auto kRecoveryStopAckTimeout = std::chrono::seconds(5);
 
 bool valid_identifier(const std::string& value)
 {
@@ -376,6 +379,7 @@ void SchedInfoServiceImpl::HandlePhase0Ack(
         state.stopped = true;
         TLOG_ERROR("[RTU-P0] node_id=", node_id, " table_id=", applied.table_id(),
                    " result=trial_failed reason=unexpected ACK or stopped trial");
+        state.settled.notify_all();
         return;
     }
     TLOG_INFO("[RTU-P0] node_id=", node_id, " table_id=", applied.table_id(),
@@ -391,6 +395,7 @@ void SchedInfoServiceImpl::HandlePhase0Ack(
         state.changed = true;
     }
     state.attempt.reset();
+    state.settled.notify_all();
 }
 
 void SchedInfoServiceImpl::AbortPhase0(Phase0State& state, const std::string& reason)
@@ -400,6 +405,7 @@ void SchedInfoServiceImpl::AbortPhase0(Phase0State& state, const std::string& re
     TLOG_ERROR("[RTU-P0] node_id=", state.node_id, " table_id=",
                state.attempt ? state.attempt->candidate.table.table_id() : "",
                " result=trial_failed reason=", reason);
+    state.settled.notify_all();
 }
 
 bool SchedInfoServiceImpl::RemovePhase0Workload(
@@ -416,9 +422,6 @@ bool SchedInfoServiceImpl::RemovePhase0Workload(
             }
         } else {
             lock.lock();
-            state.stopped = true;
-            TLOG_ERROR("[RTU-P0] node_id=", state.node_id,
-                       " result=trial_failed reason=recovery STOP; confirmed state retained");
         }
         uint64_t hash = 0;
         const bool hex = workload_id.rfind("0x", 0) == 0;
@@ -443,6 +446,23 @@ bool SchedInfoServiceImpl::RemovePhase0Workload(
         return false;
     }
     if (resolved_id) *resolved_id = actual_id;
-    if (!trigger_push) return true;
-    return SubmitPhase0Update(Phase0Operation::Remove, {}, {actual_id});
+    if (!SubmitPhase0Update(Phase0Operation::Remove, {}, {actual_id})) return false;
+    if (trigger_push) return true;
+    // Recovery STOP (DDR-011 v2.4): reply only after the correlated TableApplied.
+    // One attempt is in flight at a time, so the staged REMOVE settles first.
+    std::unique_lock<std::mutex> lock(state.mutex);
+    const bool settled = state.settled.wait_for(lock, kRecoveryStopAckTimeout, [&state] {
+        return state.stopped || !state.attempt;
+    });
+    const bool removed = settled && !state.stopped && state.confirmed &&
+        state.confirmed->workloads.count(actual_id) == 0;
+    const char* reply = removed ? "confirmed" : settled ? "failed" : "timeout";
+    if (removed) {
+        TLOG_INFO("[RTU-P0] node_id=", state.node_id, " recovery=STOP target_workloads=",
+                  actual_id, " reply=", reply);
+    } else {
+        TLOG_WARN("[RTU-P0] node_id=", state.node_id, " recovery=STOP target_workloads=",
+                  actual_id, " reply=", reply);
+    }
+    return removed;
 }

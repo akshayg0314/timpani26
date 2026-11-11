@@ -600,6 +600,9 @@ static void print_usage(const char* prog_name)
     printf(
         "  -b, --bpf               Use BPF/TT-Sched futex-based wakeup "
         "(timpani26 mode)\n");
+    printf(
+        "  -c, --cpu-time          Measure runtime with CPU time instead of "
+        "wall clock\n");
     printf("  -h, --help              Show this help message\n");
     printf("\nWorkload Examples:\n");
     printf("  Light CPU workload:\n");
@@ -633,6 +636,7 @@ int main(int argc, char* argv[])
     int loop_cnt = 10;
     bool use_timer = false;
     bool use_bpf = false;
+    bool use_cpu_time = false;
 
     /* Initialize task configuration and stats */
     rt_task_init(&task_config);
@@ -649,13 +653,14 @@ int main(int argc, char* argv[])
         {"stats", no_argument, 0, 's'},
         {"timer", no_argument, 0, 't'},
         {"bpf", no_argument, 0, 'b'},
+        {"cpu-time", no_argument, 0, 'c'},
         {"help", no_argument, 0, 'h'},
         {"version", no_argument, 0, 'V'},
         {0, 0, 0, 0}};
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "p:d:r:P:a:l:stbhV", long_options,
-                              NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:d:r:P:a:l:stbchV",
+                              long_options, NULL)) != -1) {
         switch (opt) {
             case 'p':
                 task_config.period_ms = strtoul(optarg, NULL, 10);
@@ -691,6 +696,9 @@ int main(int argc, char* argv[])
                 break;
             case 'b':
                 use_bpf = true;
+                break;
+            case 'c':
+                use_cpu_time = true;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -783,6 +791,13 @@ int main(int argc, char* argv[])
         printf("Using ttsched futex wakeup (/timpani_ttsched SHM)...\n");
     } else if (!use_timer) {
         printf("Waiting for signal %d to start periodic execution...\n", signo);
+    }
+
+    if (use_cpu_time) {
+        clockid = CLOCK_THREAD_CPUTIME_ID;
+        printf("Runtime measured with: CPU time (CLOCK_THREAD_CPUTIME_ID)\n");
+    } else {
+        printf("Runtime measured with: wall clock (CLOCK_MONOTONIC)\n");
     }
 
     while (!shutdown_requested) {
