@@ -703,7 +703,7 @@ P2에서 키를 절대 마감으로 바꿔 **EDF**로 전환하고, 승인식을
 
 **2026-11-13 범위 합의:** P1은 공통 Event/Job을 정의하고 TIMPANI가 수락·전달·처리·종료·마감 감시할 수 있는 Event-Driven Workload의 기본 환경을 구현하는 단계다. 공통 큐·식별·복구 계약, CBS 예산 집행 및 TT 없는 실행도 이 환경에 포함한다. TT 슬롯 경계 계약의 구체화·종료 집행과 CBS 마감 실패 원인 분석·원인별 복구는 P2로 분리한다. 기존 P1의 도달 기준 마감 감지·계수·기본 보고는 축소하지 않는다.
 
-이 합의는 Discussion #4 스레드에는 기록되어 있지 않다. 스레드의 기록은 2026-11-12 후속 답변과 2026-11-16 자료 답변까지다. 합의 기록의 위치는 작성자가 보충한다.
+근거 기록은 [Discussion #4의 Weekly 2026-11-12 스레드](https://github.com/eclipse-timpani/timpani26/discussions/4#discussioncomment-19542271)다. 스레드에는 회의 안건, 2026-11-12 후속 답변, 2026-11-16 자료 답변이 있다. 2026-11-13의 합의 내용 자체는 스레드에 따로 적혀 있지 않다.
 
 **출처:** [Discussion #4의 Weekly 2026-11-12 및 seokheehan 후속 답변](https://github.com/eclipse-timpani/timpani26/discussions/4). 안건의 질문 자체를 승인된 해법으로 취급하지 않는다. 아래 P1/P2는 **Event-Job 지원의 단계**이며 다른 DDR의 과거 개발 Phase 번호와 다르다. 이 표는 범위 제안이며 Project Leader의 일정·구현 승인과 타깃 검증을 대신하지 않는다.
 
