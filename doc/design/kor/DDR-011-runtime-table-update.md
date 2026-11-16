@@ -40,6 +40,16 @@ SPDX-License-Identifier: MIT
 
 ---
 
+### 1.2 2026-11-12 Weekly 연계 검토 — 제안/미구현
+
+**출처:** [Discussion #4, Weekly 2026-11-12](https://github.com/eclipse-timpani/timpani26/discussions/4). 이 절은 §1.1의 구현 완료 범위를 확장하는 주장이 아니라 후속 갱신 계약의 검토 지점이다.
+
+- **TT 슬롯 끝과 테이블 갱신:** [DDR-007 §4.3.1](DDR-007-tt-cbs-integrated-scheduling.md#431-tt-슬롯-종료-강제--2026-11-12-weekly-후속-설계)의 종료 집행이 추가되면 삭제·STOP·교체 전의 지연된 종료 이벤트가 새 테이블의 활성 TT 슬롯을 지우거나 새 태스크를 보류하지 않아야 한다. 테이블 세대·슬롯 인스턴스 식별, 적용 경계에서의 인계·무효화 순서를 상세화한다. 새로운 필드·공개 API는 승인 전이다.
+- **CBS-only 테이블:** [DDR-008 D-22](DDR-008-event-driven-workload-support.md#d-22-cbs-only-실행-tt-발화-및-tt-hyperperiod와의-독립--p1)에 따라 CBS 실행에는 공통 TT hyperperiod가 필요하지 않다. 기존 양수 hyperperiod 전제와 빈 TT 이벤트 루프가 CBS-only를 막는지 확인한다. TT 없는 테이블의 표현과 갱신 경계(즉시 적용 또는 별도 제어 경계)는 구현 전 합의하며 MIT 기반 임의 hyperperiod를 강제하지 않는다.
+- **전환:** 최초 TT 추가·마지막 TT 제거, CBS-only 시작, 유지 CBS의 예산·Job 보존, 미완료 TT 처리와 지연된 START/END를 시험한다. 전역/CPU별 시간 경계와 응답 의미를 함께 확인한다. 기존 모든 갱신을 즉시 적용으로 바꾸거나 double buffering을 새로 채택하는 결정은 아니다.
+
+---
+
 ## 2. Double Buffering 아키텍처 (Deferred — 미구현)
 
 > **상태**: 이 섹션은 `timpani26`에 **미구현**인 **계획된** 메커니즘을 기술합니다(Open Item B-2.1). 아래의 `tt_table_map_0` / `tt_table_map_1` 및 `active_map_idx`는 현재 소스에 **존재하지 않습니다** — 단일 `tt_table_map`이 있으며, `ops.dispatch()`는 (per-CPU 타이머 스레드가 몰아주는, §1.1) `current_slot_map`으로 활성 슬롯을 선택합니다. Double buffering은 BPF 테이블 map을 **통째로 원자적으로 교체**해야 하는 미래 상황을 위한 예비이며, 출시된 증분 갱신 경로(§1.1, §4)에는 필요하지 않습니다.
