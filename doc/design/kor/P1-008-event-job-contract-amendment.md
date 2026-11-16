@@ -102,6 +102,8 @@ SPDX-License-Identifier: MIT
 | [HLD-008](HLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §3.2 TIMPANI-N(DeadlineMonitor), §3.4 libttsched v2, §3.6 승인식, §4.2 정상 Event→Job, §4.4 도달 중 연속 Job, §4.7~4.8 마감 감지, §4.9 큐 넘침, §4.10 비활성·재등록, §4.11 데몬 재시작, §6.2~6.5 데이터 뷰와 proto 제안, §8 적용 방법(§8.4 FCW, §8.5 비-SOME/IP 예제), §10 오픈 이슈 |
 | [LLD-008](LLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §2 proto 제안, §3.3 승인 파이프라인, §4 BPF(실행 구간 관측), §5.4 수집기, §5.5 계수·상세 경로, §5.6 SHM v2·활성화·닫기·시작 정리, §5.9 DeadlineMonitor, §6 libttsched v2(API·스케치·인터리빙·한계·테스트), §7 샘플 앱, §8 타이밍, §9 실패 모드, §10 수용 기준 매핑, §11 WBS, §12 오픈 이슈 |
 
+> **2026-11-16 참고:** 현재 정본 버전은 REQ-008 v5.1, SRS-008 v4.1, DDR-008 v3.2, HLD-008 v5.2, LLD-008 v5.1이다. D-22~D-24는 이 합의 뒤(Weekly 2026-11-12)에 추가되었으며 이 문서의 계약을 바꾸지 않는다. 이후 변경은 각 문서의 변경 이력에 있다.
+
 ### 남은 열린 항목
 
 - **수치 바운드(후보, 미합의):** 감지 지연 2 ms 이하, 보고 지연 200 ms 이하, $L_{post}$ 50 µs, $L_{del}^{max}$ 100 µs, `tol` 50 µs, `tol_mit` 0, $\delta_{ovr}$ 1 틱, QDEPTH 8, payload 64 B, DeadlineMonitor 우선순위 97(Replenisher 98), 주기 1 ms, 대기 back-off 10 ms, SHM 후보 64 슬롯 이하 256 KiB(REQ §11 OI-18~OI-19).

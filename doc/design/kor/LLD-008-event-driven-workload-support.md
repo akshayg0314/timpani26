@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 # LLD-008: Event-Driven Workload Support — 상세 설계 (Low-Level Design)
 
 **날짜:** 2026-11-11
-**상태:** Draft (v5 — P1 Event–Job 계약 정합(Issue #53): 한 Event–한 Job, 명시적 Job 경계, 도달 기준 마감과 DeadlineMonitor, 실행 구간 관측. §1–§12 전체를 정합했다) — DDR-008(Proposal)의 D-01~D-21을 전제로 함
+**상태:** Draft (v5.1 — P1 Event–Job 계약 정합(Issue #53): 한 Event–한 Job, 명시적 Job 경계, 도달 기준 마감과 DeadlineMonitor, 실행 구간 관측. §1–§12 전체를 정합했다. v5.1에서 D-22~D-24와 리뷰 지적을 반영했다) — DDR-008(Proposal)의 D-01~D-24를 전제로 함
 **작성:** Human + AI
 **상위 문서:** [REQ-008](REQ-008-event-driven-workload-support.md), [SRS-008](SRS-008-event-driven-workload-support.md), [DDR-008](DDR-008-event-driven-workload-support.md), [HLD-008](HLD-008-event-driven-workload-support.md), [P1 계약 보강 합의](P1-008-event-job-contract-amendment.md)
 **기준 코드:** `timpani26` HEAD `4201573` (`timpani-o/`, `timpani-n/`, `sample-apps/`, `examples/someip/`)
@@ -22,6 +22,7 @@ SPDX-License-Identifier: MIT
 |:--|:--|:--|
 | v4 | 2026-11-10 | 공통 Event/Job 모델, 독립 검토·검증 반영, FCW 수정 스케치 확장, Phase 1 범위 |
 | v5 | 2026-11-11 | P1 Event–Job 계약 보강 합의(Issue #53, `P1-008-event-job-contract-amendment.md`, P1 design brief v3)에 맞춰 §1–§12 개정. §6–§12에서 libttsched v2 계약과 구현 스케치, 인터리빙 논거와 P1 한계, 샘플(evttask, FCW), 타이밍 후보와 측정 방법, 실패 모드, AC-008-01~16 매핑, WBS, 열린 이슈(L-7 철회, L-9~L-23 추가)를 갱신했다. 한 Event–한 Job과 명시적 Job 경계, 도달 기준 마감(`t_arr + D`)과 DeadlineMonitor 신설, Event 레코드 링·Job 로그를 가진 SHM v2 슬롯, libttsched `post/wait/done` 계약, BPF의 실행 구간 관측으로 축소(MIT 검사·L2 DMISS 판정 제거), 단일 admission 식(`L_del_max`, `δ_ovr`, `T_i ≤ MIT_i`, `D_i ≤ MIT_i`), FaultInfo 플래그 표 통일, proto 변경 승인 필요 표시. 어댑터 K/M 구분, batch count, 활성화 기준 DMISS는 폐지 |
+| v5.1 | 2026-11-16 | 설계 체인 리뷰 반영. DDR-008 D-22(TT 없는 CPU의 CBS 실행)와 D-24(허용 CPU 집합 확인)에 맞춰 §1 매핑에 FR-O-022, FR-B-025, FR-N-032~033을 추가했다. §3.1·§3.3의 `DEFAULT_HP_US`는 테이블 형식 값으로 정정했고(표현 변경은 OI-25), §3.3에 TT 없는 CPU의 배치를, §3.5에 `TtFreeCpuAdmitsL2WithZeroBtt`을 추가했다. §5.1 바인딩 스케치에 허용 CPU 검사(FR-N-033)를 넣고, §4·§5의 BPF dispatch와 보충·감시가 TT 이벤트에 의존하지 않음을 명시했다. §7 evttask의 C 측정 옵션, §10 AC-008-17~19, §11 WBS, §12 L-24~L-25를 추가했다. 설계 제안이며 API, protobuf, SHM 필드는 바꾸지 않았다 |
 
 ---
 
@@ -35,7 +36,7 @@ SPDX-License-Identifier: MIT
 - **libttsched v2 (승인 필요)**: `ttsched_evt_open`, `ttsched_evt_post`(도달 시각과 payload를 인라인으로 수락), `ttsched_evt_wait`(Job 하나를 시작), `ttsched_evt_done`(필수 종료). 게시 문맥과 워커는 source마다 하나다. 게시 (a)–(f)와 가져가기·종료·닫기의 경합 규칙은 §6.3에 적었다. 공개 API와 SHM 레이아웃은 승인 대상이다(§12 L-9, L-10).
 - **샘플과 libttsched 세부(§6–§7)**: `evttask`는 타이머, datagram, pipe, 자기 생성 source에서 같은 API를 쓴다. FCW는 수신 콜백이 `RadarTarget`을 인라인으로 게시하고 워커가 Job을 종료한다. 통지 API, 배치 count, 링과 무효 표시 규약은 없다.
 - **타이밍과 실패 모드(§8–§9)**: 감지 상한, 보고 상한, 도달 지연 상한, 비용은 모두 후보값이며 측정 전이다. 측정 방법을 함께 적었다. 실패 모드 표는 게시 거절, 큐 가득 참, 게시자와 워커의 사망, 데몬 재시작, 감시 정지, 기록 넘침을 포함한다.
-- **테스트**: timpani-o GTest 추가, timpani-n GTest 타깃 신설. `job_fsm.h`, SHM 프로토콜 경쟁, libttsched 경쟁 테스트를 호스트에서 실행하도록 설계한다(§5.8, §5.9, §6.5). AC-008-01~16을 테스트 또는 절차에 매핑했다(§10). 실행하거나 검증했다는 주장은 없다.
+- **테스트**: timpani-o GTest 추가, timpani-n GTest 타깃 신설. `job_fsm.h`, SHM 프로토콜 경쟁, libttsched 경쟁 테스트를 호스트에서 실행하도록 설계한다(§5.8, §5.9, §6.5). AC-008-01~19를 테스트 또는 절차에 매핑했다(§10). 실행하거나 검증했다는 주장은 없다.
 - **수치**: 감지 지연, 보고 지연, `L_del_max`, `δ_ovr`, 큐 깊이, payload 크기는 모두 후보값이며 합의와 Linux 타깃 측정이 필요하다.
 
 ---
@@ -45,9 +46,9 @@ SPDX-License-Identifier: MIT
 | 영역 | SRS-008 ID | 본 문서 절 |
 |:--|:--|:--|
 | 프로토콜 | IF-PO-001/004/005/006, IF-ON-001~004/006 | §2 |
-| TIMPANI-O | FR-O-001/003/005/010~016/020 | §3 |
-| BPF | FR-B-001~005/010~017/022~023, FR-B-024 | §4 |
-| TIMPANI-N | FR-N-002~007/010~015/020~022/024, FR-N-027~031 | §5 |
+| TIMPANI-O | FR-O-001/003/005/010~016/020/022 | §3 |
+| BPF | FR-B-001~005/010~017/022~023, FR-B-024/025 | §4 |
+| TIMPANI-N | FR-N-002~007/010~015/020~022/024, FR-N-027~033 | §5 |
 | 공통 모델·3층 | FR-G-001/002, FR-G-003 | §1.1, §1.2 |
 | 라이브러리 | FR-L-001~012, IF-L-001~004 | §5.6(SHM 레이아웃), §6 |
 | 샘플 앱 | FR-G-001, FR-L-006 | §7 |
@@ -243,7 +244,7 @@ static constexpr uint32_t L_WAKE_MAX_US  = 50;     // TIM-001 (runnable → firs
 static constexpr uint32_t L_POST_MAX_US  = 50;     // NEW: TIM-011 part 1 (post → runnable), candidate, to be measured
 static constexpr uint32_t L_DEL_MAX_US   = L_POST_MAX_US + L_WAKE_MAX_US;   // NEW: TIM-011 delivery bound, candidate 100 µs
 static constexpr uint32_t DELTA_OVR_US   = 1000;   // NEW: TIM-004 / TMG-004 overrun bound δ_ovr = one tick at HZ=1000, candidate
-static constexpr uint32_t DEFAULT_HP_US  = 10000;  // CBS-only node hyperperiod
+static constexpr uint32_t DEFAULT_HP_US  = 10000;  // TT 없는 노드의 테이블 형식 값(FR-O-015). CBS 실행은 이 값을 쓰지 않는다(D-22)
 static constexpr size_t   MAX_L2_PER_CPU = 16;     // equals BPF PROMOTE_BUDGET (§4.4), so a due throttled server is never skipped
 static constexpr size_t   MAX_TASK_ID_LEN = 15;    // Linux comm limit (TASK_COMM_LEN − 1)
 ```
@@ -307,7 +308,7 @@ if (!RegenerateAllSchedules(err)) {
 ```text
 generate_schedule(node, tasks):
   1. split TT / CBS (unchanged). CBS: T_s = period (or MIT when no period), MIT, D, C
-  2. global_hp = TT 있음 ? LCM(all TT periods on node) : DEFAULT_HP_US     // FR-O-015
+  2. global_hp = TT 있음 ? LCM(all TT periods on node) : DEFAULT_HP_US     // FR-O-015; 표현 변경은 OI-25
   3. assign_cpus(): TT round-robin (unchanged); check U_tt(k) ≤ U_BOUND (NEW)
      CBS worst-fit by U_s = C/T_s over residual (T_s replaces MIT in the utilization term:
      the server's bandwidth is C/T_s, and T_s ≤ MIT)
@@ -318,6 +319,8 @@ generate_schedule(node, tasks):
        admit_l2_fifo(k, cbs_tasks_k, u_tt_k, gaps_k, btt_k)            // replaces allocate_cbs_budgets
   5. build_table(): layer 1 TT, layer 2 EVENT_DRIVEN; table_id = "table_<gen>"
 ```
+
+TT 슬롯이 없는 CPU(TT 태스크가 없는 노드 포함)도 4단계를 거쳐 자신의 `PerCpuSchedule`을 받는다(FR-O-022). 이 CPU는 `slots_k`가 비어 있으므로 `btt_k`는 0이고, `occupancy_within_us`는 빈 `merged_us`에서 0을 돌려준다. Gap은 전체 구간 하나다. `DEFAULT_HP_US`는 테이블 형식 값과 gap 계산의 horizon으로만 쓰며, CBS 실행 파라미터가 아니다(D-22). 이 CPU의 승인 검사는 $B_{tt} = 0$으로 한다(CBS-007).
 
 ```cpp
 TtBlocking GlobalScheduler::compute_tt_blocking(std::vector<TtSlotPlacement> slots, uint32_t hp_us) {
@@ -452,6 +455,7 @@ static schedinfo::v1::FaultType map_fault_type(node::v1::FaultType t) {
 | `GlobalSchedulerTest.CbsEntryCpuZeroIsExplicit` (`has_cpu()` && `cpu()==0`) | IF-ON-003 |
 | `GlobalSchedulerTest.EventDrivenLayerEmitted` / `TtLayerHasNoCbsEntries` | FR-O-016 |
 | `GlobalSchedulerTest.CbsOnlyNodeHyperperiodNonZero` / `SlotsRepeatPerGlobalHyperperiod` | FR-O-015 |
+| `GlobalSchedulerTest.TtFreeCpuAdmitsL2WithZeroBtt` (TT 슬롯이 없는 CPU에 L2를 배치·승인하고 B_tt = 0으로 검사한다, Gap은 전체 구간. 계획된 테스트) | FR-O-022, CBS-007 |
 | `GlobalSchedulerTest.TtUtilizationBoundEnforced` | FR-O-011 |
 | `OrchestratorServiceTest.FaultTypePreserved_{BudgetExceed,MitViolation}` | FR-O-020 |
 | `OrchestratorServiceTest.FaultCountForwarded` / (승인 후) `OrchestratorServiceTest.FaultFlagsForwarded` | FR-O-020, §2.1 |
@@ -778,7 +782,7 @@ SEC("struct_ops/dispatch")
 void BPF_PROG(dispatch, s32 cpu, struct task_struct *prev)
 {
     __u64 now = bpf_ktime_get_ns();
-    if (tt_active_on_cpu((__u32)cpu, now)) return;          /* TT-first (DDR-007) */
+    if (tt_active_on_cpu((__u32)cpu, now)) return;          /* TT-first (DDR-007). TT 슬롯이 없는 CPU에서는 항상 거짓이다(FR-B-025) */
     if (!cpu_is_isolated((__u32)cpu)) { scx_bpf_consume(DSQ_BE); return; }   /* fix: DSQ_BE now consumable */
     promote_throttled_if_replenished((__u32)cpu, now);
     if (scx_bpf_consume(dsq_cbs((__u32)cpu))) return;
@@ -795,7 +799,8 @@ void BPF_PROG(running, struct task_struct *p)
     struct CbsState *c = bpf_map_lookup_elem(&cbs_map, &key);
     if (!c) return;
     c->exec_start_ns = now;                                                  /* start of this on-CPU stretch; cbs_charge() consumes and clears it in stopping */
-    /* slice cap (unchanged): p->scx.slice = max(1 µs, min(remaining_us, µs until the next TT slot on this CPU)) */
+    /* slice cap (unchanged): p->scx.slice = max(1 µs, min(remaining_us, µs until the next TT slot on this CPU)).
+       TT 슬롯이 없는 CPU에서는 다음 TT 슬롯이 없으므로 상한은 remaining_us뿐이다(FR-B-025) */
 }
 
 SEC("struct_ops/stopping")
@@ -926,6 +931,12 @@ if (auto g = bind_l2_task(r->tid, b)) registry.track(e.task_id(), r->tid, b, *g)
 //     rescan thread may both call it). The task is NOT in SCHED_EXT yet when this begins.
 std::optional<uint32_t> bind_l2_task(pid_t tid, const L2Binding& b) {
     std::lock_guard<std::mutex> lk(bind_mu_);
+    const CpuSet allowed = allowed_cpus(tid);                                      // sched_getaffinity(tid); empty set if the read fails
+    if (!allowed.contains(b.cpu)) {                                                // FR-N-033, CBS-008: before any write; the rescan binder (§5.2) runs this too
+        log_error_rate_limited("assigned CPU not in allowed set: task=" + b.task_id + " cpu=" + std::to_string(b.cpu) + " allowed=" + allowed.str());   // logged, not apply_error
+        registry.add_unresolved(b.task_id, b);                                     // stays unresolved; retried at the rescan period (FR-N-003)
+        return std::nullopt;                                                       // no SCHED_EXT switch, no BPF state, no slot activation
+    }
     CbsState st{}; st.budget_us = b.budget_us; st.period_us = b.period_us; st.deadline_us = b.deadline_us;
     st.remaining_us = b.budget_us; st.replenish_at_ns = 0; st.throttled = 0;      // no window yet: the first activation opens it (D-04 rule 1)
     bpf_loader.update_cbs_state(b.key, st);                                        // 1. the server first
@@ -959,6 +970,8 @@ job_trace.set_task_names(hash → name);                                  // for
 event_sources.set_shm(timer_master.shm(), evt_slots);                   // EventSourceMonitor reads cumulative counters (§5.4(b))
 node_client.send_table_applied(table.table_id(), apply_success, apply_error);
 ```
+
+`allowed_cpus(tid)`는 `sched_getaffinity(tid)`로 허용 집합(`CpuSet`)을 읽는다. 읽기에 실패하면 빈 집합을 돌려주며, 그러면 바인딩하지 않는다. 이 검사는 `bind_l2_task`(C)의 첫 단계에서 하므로 테이블 적용 경로와 재식별 경로(§5.2 `rescan_loop`)가 모두 거친다. 이미 미해결 목록에 있는 이름을 다시 넣어도 목록은 바뀌지 않는다. 허용 CPU 검사(FR-N-033, CBS-008)는 위 (B)의 Isolated CPU 검사와 다르다. Isolated CPU 검사는 설정 오류이므로 `apply_error`로 기록한다. 허용 집합 검사는 워커 쪽 배치 문제이므로 `apply_error`를 쓰지 않고 로그를 남긴 뒤 미해결 목록에 둔다. 이 경우 `bind_l2_task`는 어떤 쓰기도 하기 전에 `nullopt`를 돌려주므로 SCHED_EXT 전환, BPF 상태 등록과 Timer Master 활성화가 없다. 바인딩 경로는 스레드의 affinity나 cgroup을 바꾸지 않는다. SCHED_EXT 전환 실패의 처리는 바꾸지 않는다.
 
 제거·STOP 경로(`RecoverySignal`, 테이블 소멸)는 `unbind_l2_task(..., worker_exited=false)`를 호출한 뒤 `replenisher.remove(key)`, `fault_monitor.clear_task(key)`, `deadline_monitor.on_deactivated(slot)`, `job_trace.clear_task(key)`, `event_sources.clear_task(key)`, `registry.remove_expected(name)`를 수행한다(FR-N-005). 이 경로에서 `RUNNING` 기록은 `ABANDONED`가 되지 않고 마감 감시 아래 남는다. 그 뒤 워커가 끝내면 `done()`이 기록한다(§5.6 프로토콜 5). `kind = NONE` 뒤에도 가져가기 CAS가 닫기 sweep보다 먼저 성공한 Job은 RUNNING으로 남아 워커가 끝까지 처리한다(§6.4, A12).
 
@@ -1004,7 +1017,7 @@ private:
 
 ### 5.3 `replenisher.{h,cpp}` — 신규 (P1 설계에서 변경 없음)
 
-이 컴포넌트는 P1 변경에서 바뀌지 않는다. 보충 윈도우 규칙(D-04)과 kick 프로토콜(D-07)은 Job 경계와 무관하다. 마감 감시(DeadlineMonitor, §5.9)와 스레드를 합칠지는 열린 항목(F-12)이며 이 절의 결정이 아니다. 본문은 9209bc5 그대로 둔다.
+이 컴포넌트는 P1 변경에서 바뀌지 않는다. 보충 윈도우 규칙(D-04)과 kick 프로토콜(D-07)은 Job 경계와 무관하다. TT 슬롯이 없는 CPU에서도 같은 방식으로 동작하며 TT 이벤트나 hyperperiod를 실행 조건으로 쓰지 않는다(FR-N-032, D-22). 마감 감시(DeadlineMonitor, §5.9)와 스레드를 합칠지는 열린 항목(F-12)이며 이 절의 결정이 아니다. 본문은 9209bc5 그대로 둔다.
 
 
 ```cpp
@@ -1564,7 +1577,7 @@ volatile struct timpani_ttsched_shm* shm() const;                              /
 
 ### 5.9 `deadline_monitor.{h,cpp}` — 신규 (DeadlineMonitor)
 
-> 이 컴포넌트는 P1에서 새로 추가된다. 모든 Event의 절대 마감 `t_dl`을 큐 대기, 실행, 선점, 스로틀, 유휴 CPU 상태와 무관하게 감시한다. 완료 콜백을 기다리지 않는다. 결과는 Job당 한 번이다.
+> 이 컴포넌트는 P1에서 새로 추가된다. 모든 Event의 절대 마감 `t_dl`을 큐 대기, 실행, 선점, 스로틀, 유휴 CPU 상태와 무관하게 감시한다. 완료 콜백을 기다리지 않는다. 결과는 Job당 한 번이다. TT 슬롯이 없는 CPU에서도 같은 방식으로 동작하며 TT 이벤트나 hyperperiod 경계를 실행 조건으로 쓰지 않는다(FR-N-032, D-22).
 
 **스레드와 시각**
 
@@ -2285,6 +2298,7 @@ threads:
 - `--midjob-block-us`는 A-06 제약을 재현하는 옵션이 아니다. Job 중 블로킹은 허용되고 관측되므로, 이 옵션은 블로킹이 응답 시간과 admission 보장 밖이라는 경우를 만든다.
 - `--count K`로 K개 Event 뒤에 생성을 멈춘다. 워커의 `done` 결과는 `--log`에 남긴다.
 - `cbstask.c`는 유지하되 README에서 `evttask`를 권장 생성기로 표기한다.
+- **C 측정용 옵션(필요한 도구 작업, 미구현, HLD-008 §8.2, OI-23):** 입력 내용 선택(payload 내용 지정), 기록된 입력 순서의 재생(replay), 워커가 `ttsched_evt_wait` 복귀 직후와 다음 호출 직전에 `CLOCK_THREAD_CPUTIME_ID`를 읽어 그 차를 Job당 CPU 시간으로 `--log`에 남기는 기능이다(`done` 포함. wait 안에서 쓰는 CPU 시간은 들어가지 않는다). 도달 간격은 `--mit-us`와 `--burst`로 주기와 묶음만 만들 수 있다. 위 세 항목은 설계 목록이며 `evttask.c`에 아직 없다. 옵션 이름은 구현 때 정한다.
 
 ### 7.2 FCW 어댑터 축소 (`examples/someip/radar_based_fcw/fcw_consumer.cpp`)
 
@@ -2416,7 +2430,7 @@ int main(int argc, char* argv[]) {
 
 ## 10. 테스트 훅 및 수용 기준 매핑
 
-AC-008-01 ~ 16 전체를 매핑한다. AC-008-13 ~ 16은 신규다. 수단은 `evttask`(§7.1), FCW(§7.2), `mock_pullpiri.py`, GTest 또는 절차다. "훅"은 판정에 쓰는 기록이나 계수다. Job 로그는 `(gen, seq)`로 Event와 대응한다.
+AC-008-01 ~ 19 전체를 매핑한다. AC-008-13 ~ 16은 신규다. AC-008-17 ~ 19는 v5.1에서 추가했다. 수단은 `evttask`(§7.1), FCW(§7.2), `mock_pullpiri.py`, GTest 또는 절차다. "훅"은 판정에 쓰는 기록이나 계수다. Job 로그는 `(gen, seq)`로 Event와 대응한다.
 
 | AC-008 | 수단 | 훅 |
 |:--|:--|:--|
@@ -2436,6 +2450,9 @@ AC-008-01 ~ 16 전체를 매핑한다. AC-008-13 ~ 16은 신규다. 수단은 `e
 | 14 (대기·스로틀 중 감지, 늦은 수집, 중복 없음, 폐기·취소) | (a) 큐 대기: 워커를 `--midjob-block-us`로 붙잡아 다음 Event가 `t_dl`을 넘기게 한다. (b) 스로틀: `--overrun-us`로 예산을 소진하고 대기 Event가 기한을 넘긴다. (c) 정시 완료의 늦은 수집: 테스트 훅으로 JobTraceCollector 수집을 지연. (d) 마감 뒤 폐기 또는 CANCELLED: 테스트 훅으로 종료 전이를 `t_dl` 뒤에 둔다 | (a) 미스 기록 `t_detect − t_dl` ≤ TIM-009 후보, 플래그 NOT_STARTED. (b) THROTTLED. (c) 마감 실패 없음(`t_end ≤ t_dl`). (d) 마감 뒤 종료 또는 닫기는 마감 실패로 계수, `missed`는 Job당 1회(`RaceTest.MonitorVsDoneSameBoundary`와 함께 확인) |
 | 15 (수락·넘침·취소·재등록·재시작에서 다른 Event의 데이터를 처리하지 않음; 옛 세대 기록이 상태를 바꾸지 않음) | (a) 넘침: 워커를 붙잡고 QDEPTH를 넘는 `evttask --burst`. (b) 재등록: `mock_pullpiri.py`로 파라미터 변경 중 부하. (c) 데몬 재시작 중 부하 | payload에 생성기 순번을 넣어 워커가 받은 payload 순번과 `(gen, seq)`에 대응하는 생성기 순번이 같다(불일치 0). `overflow`는 E_FULL 수와 같다. 재등록 뒤 옛 `gen`의 기록은 계수와 상태를 바꾸지 않는다(`ActivationTest.ClosesLeftoverRecordsBeforePublishing`, `DeadlineMonitorTest.StaleGenRecordChangesNothingOfNewRegistration`) |
 | 16 (FCW와 비-SOME/IP 앱의 같은 계약: 간섭) | (a) 서로 다른 격리 CPU: FCW(`-be`로 과실행)와 비-SOME/IP 앱(HLD-008 §8의 Unix datagram 센서 앱)을 함께 실행. (b) 같은 CPU, 재검증된 파라미터: FCW D를 6000 µs로 올리고 두 번째 앱의 D를 §3.3 식이 통과하도록 정한다. (c) 기본 FCW 파라미터 + 같은 CPU의 두 번째 L2 task | (a)와 (b): 다른 앱의 마감 실패 = 0, 응답 시간 분포가 과실행 없는 기준과 같은 범위(TMG-016 후보 안). (c): admission이 `DeadlineInfeasible`로 거부한다(`GlobalSchedulerTest.FifoAdmission_SecondL2Rejected`와 `mock_pullpiri` 적용 로그). 숫자 근거는 HLD-008 §8과 §3.3 산술이다 |
+| 17 (TT 없는 CPU의 CBS 실행, FR-O-022·FR-N-032·FR-B-025) | (a) TT 슬롯이 없는 노드 또는 혼합 노드의 TT 없는 CPU에 L2 task를 배치하고, `evttask --source timerfd` 또는 `udp`로 첫 Event를 보낸다. (b) 마지막 L2 활동 뒤 $T_s$ 이상 쉰 뒤 Event를 보낸다. (c) `evttask --overrun-us`로 예산을 소진한 뒤 같은 CPU에 다른 활동을 두지 않는다. (d) 스로틀 중이나 QUEUED 상태에서 마감이 지나게 둔다. BPF 트레이스로 TT_START와 TT_END를 센다(계획 테스트 `EvtIntegration.TtFreeCpuCbsLifecycle`) | (a) 수락, 처리, 종료와 Job 기록이 한 건 생긴다. (b) 시작 지연이 TIM-011과 TIM-001의 합의 상한 안이고, 시작 구간에 $C_s$가 주어진다. (c) 보충이 TIM-003의 합의 상한 안에 끝난다. (d) 마감 실패가 TIM-009의 합의 상한 안에 감지된다. 전 구간에서 그 CPU의 TT_START와 TT_END는 0건이다 |
+| 18 (TT 최초 추가·마지막 TT 제거 시 L2 보존, RTU-001) | L2 엔트리는 그대로 두고, 그 CPU의 첫 TT 태스크 추가와 마지막 TT 태스크 제거를 `mock_pullpiri.py`로 10회 반복한다. 반복 중에는 Event 부하를 건다(계획 테스트 `EvtIntegration.TtAddRemoveKeepsL2State`) | 잔여 예산과 보충 윈도우가 초기화되지 않는다. 열린 Event의 `(gen, seq)`와 `t_dl`이 바뀌지 않는다. 갱신 때문에 생긴 CANCELLED와 ABANDONED가 0건이다. 데몬 PID가 바뀌지 않는다. Timer Master 스레드 재구성과 epoch 갱신은 일어날 수 있으며 L2 상태 초기화의 사유가 아니다 |
+| 19 (잘못된 cpuset 배치의 명시적 실패, CBS-008) | 배정 CPU가 워커의 허용 CPU 집합 밖에 있도록 cpuset을 일부러 준 뒤 `mock_pullpiri.py`로 등록한다. 그 뒤 cpuset을 바로잡는다(계획 테스트 `TaskRegistryTest.WrongCpusetFailsExplicitly`) | 바인딩을 시도한 시점에 오류 로그가 남는다. 그 태스크는 SCHED_EXT 정책으로 전환되지 않는다. BPF 스케줄러가 계속 동작하고, 같은 노드의 다른 L1과 L2는 영향을 받지 않는다(L1 DMISS 0). cpuset을 바로잡은 시각부터 지연 식별 상한(TIM-006, T_bind) 안에 바인딩된다(측정 시작점은 정정 시각) |
 
 ---
 
@@ -2459,7 +2476,7 @@ AC-008-01 ~ 16 전체를 매핑한다. AC-008-13 ~ 16은 신규다. 수단은 `e
 | N-8 | timpani-n GTest 타깃(§5.8, §5.9) | `timpani-n/tests/*`, `CMakeLists.txt` | N-1~6 |
 | S-1 | `evttask.c`(신규), FCW 어댑터 축소(`cbs_queue`와 조건 변수 삭제), `libtimpani_rt` 폐기, yaml과 json의 MIT 필드 | `sample-apps/src/evttask.c`, `examples/someip/*`, `scripts/*` | N-2, O-1 |
 | D-1 | 문서 정합: DDR-002 §7, DDR-005, DDR-007 §4.2 / §4.5(보충 의미) / §4.5.3 / §7, DDR-012, `structure.md`, README, CHANGELOG | `doc/**` | 전체 |
-| T-1 | 통합 스크립트 `scripts/verify_event_driven.sh`: AC-008-01~12 자동화 가능 항목, 13~16 절차 | `scripts/` | 전체 |
+| T-1 | 통합 스크립트 `scripts/verify_event_driven.sh`: AC-008-01~12와 17~19 자동화 가능 항목, 13~16 절차 | `scripts/` | 전체 |
 
 - **PoC 항목**: P-1 DeadlineMonitor 1 kHz 스캔의 비용과 지터를 타깃 CPU에서 측정(TT 부하 아래와 선택 CPU에서). 이벤트 기반 깨움이 합의된 상한에 필요한지 판단한다(F-10). P-2 post·wait·done의 원자 연산 비용과 $L_{post}$(post → runnable)를 측정한다. P-3 $\delta_{ovr}$를 nohz_full과 틱 재시작 지연 아래에서 측정한다. P-4 유휴 CPU에서 $L_{wake}$(TIM-001)와 $L_{del,max}$를 측정하고, TT 부하 아래의 깨움(TIM-002)은 $B_{tt}$ 항의 검증에 쓴다. N-0 PoC는 기존 항목을 유지한다.
 - **제거된 작업 항목**: `ttsched_evt_notify` 구현과 테스트, 배치 count 대기, 앱 소유 큐와 invalidate·clear 로직, `TTSCHED_EVT_RESET` 처리, 마커 전환과 K/M 원천 전환, BPF의 MIT 검사와 `FAULT_MIT_VIOLATION` 발행, BPF의 L2 DMISS 판정과 조기 DMISS.
@@ -2494,3 +2511,5 @@ AC-008-01 ~ 16 전체를 매핑한다. AC-008-13 ~ 16은 신규다. 수단은 `e
 | L-21 | 열린 질문: DeadlineMonitor와 Replenisher 스레드를 합칠지(F-12). 현재는 분리한다 | 스케줄링 설계, RT 비용 |
 | L-22 | 열린 질문: TMG-011을 게시·대기·완료 비용 항목으로 쓸지(§8 현재 용법), REQ 쪽의 정의와 맞춘다 | 추적성 |
 | L-23 | 열린 질문: FCW 생산자 측의 TT 등록(`timpani_tt_register`) 대체 방법은 HLD-008 §8과 함께 확정한다 | 샘플 앱 |
+| L-24 | C 측정 절차와 여유율(HLD-008 H-19, REQ-008 OI-23): Job당 CPU 수요를 주는 레코드와 evttask에 필요한 옵션(§7.1) | 승인식 입력 C의 근거 |
+| L-25 | 재바인딩 경계의 재게시에서 `t_arr` 기준과 중복 처리 책임(HLD-008 H-20, REQ-008 OI-24) | 어댑터 계약, 마감 기준 |

@@ -45,7 +45,7 @@ SPDX-License-Identifier: MIT
 **출처:** [Discussion #4, Weekly 2026-11-12](https://github.com/eclipse-timpani/timpani26/discussions/4). 이 절은 §1.1의 구현 완료 범위를 확장하는 주장이 아니라 후속 갱신 계약의 검토 지점이다.
 
 - **TT 슬롯 끝과 테이블 갱신:** [DDR-007 §4.3.1](DDR-007-tt-cbs-integrated-scheduling.md#431-tt-슬롯-종료-강제--2026-11-12-weekly-후속-설계)의 종료 집행이 추가되면 삭제·STOP·교체 전의 지연된 종료 이벤트가 새 테이블의 활성 TT 슬롯을 지우거나 새 태스크를 보류하지 않아야 한다. 테이블 세대·슬롯 인스턴스 식별, 적용 경계에서의 인계·무효화 순서를 상세화한다. 새로운 필드·공개 API는 승인 전이다.
-- **CBS-only 테이블:** [DDR-008 D-22](DDR-008-event-driven-workload-support.md#d-22-cbs-only-실행-tt-발화-및-tt-hyperperiod와의-독립--p1)에 따라 CBS 실행에는 공통 TT hyperperiod가 필요하지 않다. 기존 양수 hyperperiod 전제와 빈 TT 이벤트 루프가 CBS-only를 막는지 확인한다. TT 없는 테이블의 표현과 갱신 경계(즉시 적용 또는 별도 제어 경계)는 구현 전 합의하며 MIT 기반 임의 hyperperiod를 강제하지 않는다.
+- **CBS-only 테이블:** [DDR-008 D-22](DDR-008-event-driven-workload-support.md#d-22-cbs-only-실행-tt-발화-및-tt-hyperperiod와의-독립--p1)에 따라 CBS 실행은 hyperperiod 값을 읽지 않도록 설계한다(설계 분석, P1 검증 대상). 기존 양수 hyperperiod 전제와 빈 TT 이벤트 루프가 CBS-only를 막는지 확인한다. TT 없는 테이블의 `hyperperiod_us`는 [SRS-008 FR-O-015](SRS-008-event-driven-workload-support.md)(0이 아닌 정의된 값)가 기준이며, 표현 변경과 갱신 경계(즉시 적용 또는 별도 제어 경계)는 구현 전 합의한다(REQ-008 OI-25). MIT 기반 임의 hyperperiod는 만들지 않는다.
 - **전환:** 최초 TT 추가·마지막 TT 제거, CBS-only 시작, 유지 CBS의 예산·Job 보존, 미완료 TT 처리와 지연된 START/END를 시험한다. 전역/CPU별 시간 경계와 응답 의미를 함께 확인한다. 기존 모든 갱신을 즉시 적용으로 바꾸거나 double buffering을 새로 채택하는 결정은 아니다.
 
 ---
