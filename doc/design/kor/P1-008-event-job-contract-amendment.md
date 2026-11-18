@@ -45,7 +45,7 @@ SPDX-License-Identifier: MIT
 
 ## 3. 명시적 연결 계약과 책임
 
-공통 용어는 [REQ-008 §2](REQ-008-event-driven-workload-support.md#2-개념-모델-공통-eventjob-모델-common-eventjob-model)를 정본으로 삼는다. **CBS 예산 관리**와 **Event/Job 관리**는 같은 L2 워커의 상호 보완적 책임이지 두 앱·클래스·모드나 앱의 두 부분이 아니다. 명시적 Event 연결은 Event/Job 관리 수단이며 Accepted DDR-001의 L2 분류를 바꾸지 않는다. 이는 기존 합의의 책임 표현을 정리한 것이며 선택적 연결·호환성이나 P1/P2 범위를 바꾸지 않는다.
+공통 용어는 [REQ-008 §2](REQ-008-event-driven-workload-support.md#2-개념-모델-공통-eventjob-모델-common-eventjob-model)를 정본으로 삼는다. **CBS 예산 관리**와 **Event/Job 관리**는 같은 L2 워커의 상호 보완적 책임이지 두 앱·클래스·모드나 앱의 두 부분이 아니다. 명시적 Event 연결은 Event/Job 관리 수단이며 Accepted DDR-001의 L2 분류를 바꾸지 않는다. 이는 Project Leader(작성자)의 결정으로 책임 표현을 정리한 것이며 선택적 연결·호환성이나 P1/P2 범위를 바꾸지 않는다.
 
 앱은 Event의 의미와 수신 경계를 정한다. TIMPANI가 임의의 `recv()`·`read()`·커널 깨움에서 메시지 의미를 자동 추론하지 않는다.
 
@@ -102,11 +102,13 @@ SPDX-License-Identifier: MIT
 |:--|:--|:--|:--|
 | [REQ-008](REQ-008-event-driven-workload-support.md) | v5 | 계약 반영 | §2.3~2.5 생명주기·불변식·마감 규칙, §4.1 MOD-009·010·011, §4.2 DET-007, §4.4 PRT-008·009, §4.6 TIM-009~011, §4.7 IF-007, §4.9 OBS-004, §5 AC-008-13~16. A-04 철회, A-06 정확성 전제 해제(변경 이력 v5) |
 | [SRS-008](SRS-008-event-driven-workload-support.md) | v4 | 계약 반영 | §3.10 FR-L-009~012, §3.5 FR-N-027~031, §3.7 FR-B-024, §3.0 FR-G-003, §4 TMG-014~016, §5.3 IF-L-004. REQ 신규 ID의 대응은 §8.1·§8.2 추적성 매트릭스. 제약 C-08(게시 맥락 하나)·C-09(SHM 쓰기 주체 신뢰)는 SRS-008 §7과 추적성 매트릭스(§8.1), REQ-008 §8에 반영되었다 |
-| [DDR-008](DDR-008-event-driven-workload-support.md) | v2 | 계약 반영 | D-01·02·03·04·05·09·10·11·14·16·17 개정, D-07·D-08은 용어와 스레드 정합만 보완(D-02 BPF 실행 구간 관측, D-03 API·SHM, D-04 예산과 Job, D-05 MIT, D-09 수용식, D-10 결함, D-11 proto와 `job_gen`, D-16 기록, D-17 세대). 신규 D-18 한 Event–한 Job, D-19 공통 Event 큐, D-20 마감 감지, D-21 CBS 예산 관리와 Event/Job 관리의 책임 구분. F-3·F-8은 철회 표시와 대체 항목 지시. 폐기된 대안은 D-03·D-19 등의 대안 표에 기록 |
+| [DDR-008](DDR-008-event-driven-workload-support.md) | v2 | 계약 반영 | D-01·02·03·04·05·09·10·11·14·16·17 개정, D-07·D-08은 용어와 스레드 정합만 보완(D-02 BPF 실행 구간 관측, D-03 API·SHM, D-04 예산과 Job, D-05 MIT, D-09 수용식, D-10 결함, D-11 proto와 `job_gen`, D-16 기록, D-17 세대). 신규 D-18 한 Event–한 Job, D-19 공통 Event 큐, D-20 마감 감지, D-21 예산 전용 L2 태스크 class. F-3·F-8은 철회 표시와 대체 항목 지시. 폐기된 대안은 D-03·D-19 등의 대안 표에 기록 |
 | [HLD-008](HLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §3.2 TIMPANI-N(DeadlineMonitor), §3.4 libttsched v2, §3.6 수용식, §4.2 정상 Event→Job, §4.4 도달 중 연속 Job, §4.7~4.8 마감 감지, §4.9 큐 넘침, §4.10 비활성·재등록, §4.11 데몬 재시작, §6.2~6.5 데이터 뷰와 proto 제안, §8 적용 방법(§8.4 FCW, §8.5 비-SOME/IP 예제), §10 오픈 이슈 |
-| [LLD-008](LLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §2 proto 제안, §3.3 수용 판정 파이프라인, §4 BPF(실행 구간 관측), §5.4 수집기, §5.5 계수·상세 경로, §5.6 SHM v2·활성화·닫기·시작 정리, §5.9 DeadlineMonitor, §6 libttsched v2(API·스케치·인터리빙·한계·테스트), §7 샘플 앱, §8 타이밍, §9 실패 모드, §10 수용 기준 매핑, §11 WBS, §12 오픈 이슈 |
+| [LLD-008](LLD-008-event-driven-workload-support.md) | v5 | 계약 반영 | §2 proto 제안, §3.3 파이프라인과 수용 판정, §4 BPF(실행 구간 관측), §5.4 수집기, §5.5 계수·상세 경로, §5.6 SHM v2·활성화·닫기·시작 정리, §5.9 DeadlineMonitor, §6 libttsched v2(API·스케치·인터리빙·한계·테스트), §7 샘플 앱, §8 타이밍, §9 실패 모드, §10 수용 기준 매핑, §11 WBS, §12 오픈 이슈 |
 
 > **2026-11-16 참고:** 현재 정본 버전은 REQ-008 v5.1, SRS-008 v4.1, DDR-008 v3.2, HLD-008 v5.2, LLD-008 v5.1이다. D-22~D-24는 이 합의 뒤(Weekly 2026-11-12)에 추가되었으며 이 문서의 계약을 바꾸지 않는다. 이후 변경은 각 문서의 변경 이력에 있다.
+
+> **2026-11-18 참고:** 2026-11-17에 공개 호출 이름, wait 안에서의 Job 시작 확정, CBS 예산 관리와 Event/Job 관리의 책임 구분을 본문에 반영했다. 이는 Project Leader(작성자)의 결정이다. 정식 문서는 REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, HLD-008 v5.3, LLD-008 v5.2다.
 
 ### 남은 열린 항목
 

@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 # LLD-008: Event-Driven Workload Support — 상세 설계 (Low-Level Design)
 
 **날짜:** 2026-11-11
-**상태:** Draft (v5.1 — P1 Event–Job 계약 정합(Issue #53): 한 Event–한 Job, 명시적 Job 경계, 도달 기준 마감과 DeadlineMonitor, 실행 구간 관측. §1–§12 전체를 정합했다. v5.1에서 D-22~D-24와 리뷰 지적을 반영했다) — DDR-008(Proposal)의 D-01~D-24를 전제로 함
+**상태:** Draft (v5.2 — P1 Event–Job 계약 정합(Issue #53): 한 Event–한 Job, 명시적 Job 경계, 도달 기준 마감과 DeadlineMonitor, 실행 구간 관측. §1–§12 전체를 정합했다. v5.1에서 D-22~D-24와 리뷰 지적을 반영했다) — DDR-008(Proposal)의 D-01~D-24를 전제로 함
 **작성:** Human + AI
 **상위 문서:** [REQ-008](REQ-008-event-driven-workload-support.md), [SRS-008](SRS-008-event-driven-workload-support.md), [DDR-008](DDR-008-event-driven-workload-support.md), [HLD-008](HLD-008-event-driven-workload-support.md), [P1 계약 보강 합의](P1-008-event-job-contract-amendment.md)
 **기준 코드:** `timpani26` HEAD `4201573` (`timpani-o/`, `timpani-n/`, `sample-apps/`, `examples/someip/`)
@@ -23,6 +23,7 @@ SPDX-License-Identifier: MIT
 | v4 | 2026-11-10 | 공통 Event/Job 모델, 독립 검토·검증 반영, FCW 수정 스케치 확장, Phase 1 범위 |
 | v5 | 2026-11-11 | P1 Event–Job 계약 보강 합의(Issue #53, `P1-008-event-job-contract-amendment.md`, P1 design brief v3)에 맞춰 §1–§12 개정. §6–§12에서 libttsched v2 계약과 구현 스케치, 인터리빙 논거와 P1 한계, 샘플(evttask, FCW), 타이밍 후보와 측정 방법, 실패 모드, AC-008-01~16 매핑, WBS, 열린 이슈(L-7 철회, L-9~L-23 추가)를 갱신했다. 한 Event–한 Job과 명시적 Job 경계, 도달 기준 마감(`t_arr + D`)과 DeadlineMonitor 신설, Event 레코드 링·Job 로그를 가진 SHM v2 슬롯, libttsched 게시·Event 대기·종료 계약, BPF의 실행 구간 관측으로 축소(MIT 검사·L2 DMISS 판정 제거), 단일 수용식(`L_del_max`, `δ_ovr`, `T_i ≤ MIT_i`, `D_i ≤ MIT_i`), FaultInfo 플래그 표 통일, proto 변경 승인 필요 표시. 어댑터 K/M 구분, batch count, 활성화 기준 DMISS는 폐지 |
 | v5.1 | 2026-11-16 | 설계 체인 리뷰 반영. DDR-008 D-22(TT 없는 CPU의 CBS 실행)와 D-24(허용 CPU 집합 확인)에 맞춰 §1 매핑에 FR-O-022, FR-B-025, FR-N-032~033을 추가했다. §3.1·§3.3의 `DEFAULT_HP_US`는 테이블 형식 값으로 정정했고(표현 변경은 OI-25), §3.3에 TT 없는 CPU의 배치를, §3.5에 `TtFreeCpuAdmitsL2WithZeroBtt`을 추가했다. §5.1 바인딩 스케치에 허용 CPU 검사(FR-N-033)를 넣고, §4·§5의 BPF dispatch와 보충·감시가 TT 이벤트에 의존하지 않음을 명시했다. §7 evttask의 C 측정 옵션, §10 AC-008-17~19, §11 WBS, §12 L-24~L-25를 추가했다. 설계 제안이며 API, protobuf, SHM 필드는 바꾸지 않았다 |
+| v5.2 | 2026-11-18 | 2026-11-17 변경: admission 용어를 수용 판정·수용식으로, 도착을 도달로 통일했다. budget-only L2 클래스 서술을 CBS 예산 관리와 Event/Job 관리의 책임 구분으로 바꿨다. 클래스나 구성 플래그는 두지 않는다(D-21, Project Leader(작성자)의 결정). wait 안에서 Job 시작을 확정하고 별도 공개 취득 API는 두지 않는다. 실행 문맥(D-24)과 타이머 대안 비교(F-10, OI-22)를 추가했다. 2026-11-18 리뷰 정정: `take()`의 복사 대상을 호출자 `ev` 버퍼로 고치고 앱 분류 비의존 문장을 복원했다. 정식 문서는 REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, HLD-008 v5.3, LLD-008 v5.2다. 이전 이력 행의 용어도 새 용어로 바꿨다. |
 
 ---
 
@@ -93,7 +94,7 @@ SPDX-License-Identifier: MIT
   - I1 (불변식): 수락된 모든 Event는 정확히 한 개의 종료 상태에 도달하며, Job과 수락된 Event는 1:1로 대응한다.
 - **MIT**: 어댑터 경계의 도달에 대한 제약이다. MIT 계수에 들어가는 게시는 수락, 가득 참 거절, 롤백(REVOKED) 중 하나로 끝난다. 비활성 source에 대한 게시는 도달로 세지 않는다. MIT를 어기는 도달도 수락하고 큐에 넣으며, 위반을 계수하고 보고한다. **활성화 기준 MIT 검사는 없다**(A-04 철회).
 - **세 계층**: (1) 모델, (2) 명시적 연결과 커널 관측 — 명시적 연결(libttsched Event 큐)은 Event, Job, 마감을 제공하는 유일한 경로이고, 커널 관측(BPF)은 모든 L2 task의 실행 구간과 예산을 관측한다, (3) 집행 — CBS·CPU·TT는 BPF, 마감 감시와 보고는 TIMPANI-N, 수용 판정은 TIMPANI-O.
-- **책임과 관측 범위(MOD-011, D-21)**: 명시적 Event 연결을 쓰지 않아도 CBS 예산 관리, CPU 고정, BUDGET_EXCEED, 실행 구간 기록은 유지된다. 연결 없이는 Event 식별·도달 시각·Job 기록·MIT 계수·Event 기준 마감 감시의 정보를 얻지 못하며 BPF 실행 구간에서 이를 추정하지 않는다. Event 기록이 없을 때 선언 D는 수용 판정 파라미터이지 감시되는 Job 마감이 아니다. P1은 추가 분류·구성 플래그를 두지 않는다. source에 Event 기록이 없으면 DeadlineMonitor가 판정할 객체가 없는 것이며 일시적인 게시 침묵으로 앱을 재분류하지 않는다.
+- **책임과 관측 범위(MOD-011, D-21)**: 명시적 Event 연결을 쓰지 않아도 CBS 예산 관리, CPU 고정, BUDGET_EXCEED, 실행 구간 기록은 유지된다. 연결 없이는 Event 식별·도달 시각·Job 기록·MIT 계수·Event 기준 마감 감시의 정보를 얻지 못하며 BPF 실행 구간에서 이를 추정하지 않는다. Event 기록이 없을 때 선언 D는 수용 판정 파라미터이지 감시되는 Job 마감이 아니다. P1은 추가 분류·구성 플래그를 두지 않으며, 어떤 컴포넌트도 앱 분류에 의존하지 않는다. source에 Event 기록이 없으면 DeadlineMonitor가 판정할 객체가 없는 것이며 일시적인 게시 침묵으로 앱을 재분류하지 않는다.
 - **A-06 (블로킹)**: 더 이상 정합성 전제가 아니다. Job 경계가 명시되므로 Job 중 블로킹은 허용되고 관측된다(R에 포함되며, 블로킹 뒤의 깨움은 열린 예산 윈도우 안의 커널 활성화다). 다만 수용 판정 결과(§3.3)는 블로킹하지 않는 Job에만 보장되며, 블로킹하는 source의 마감은 감시되지만 보장되지 않는다.
 
 ### 1.3 P1 한계 요약 (상세는 각 절)
@@ -1757,7 +1758,7 @@ int  ttsched_wait_next_period(void);     /* L1 (TT), unchanged */
 호출 규약과 상태:
 
 - 공개 API 명칭은 게시(post)·Event 대기(wait)·종료(done)다(REQ-008 §2). wait는 처리할 Event가 있을 때까지 기다리고 같은 호출 안에서 Job 시작을 확정·기록하여 Event를 인계한 뒤 반환한다. 이미 QUEUED Event가 있으면 블로킹 없이 반환할 수 있다. 별도 공개 취득 API는 없다.
-- **Job 시작 상태 전이(`QUEUED → RUNNING`), 즉 처리 시작 확정**은 wait 내부의 CAS(compare-and-swap)로 수행한다. CAS는 읽어 둔 상태 워드와 현재 값이 같을 때만 새 값으로 바꾸는 원자적 조건부 갱신이다. 추가 큐·공개 API·스케줄러 연산도, 페이로드 복사도 아니다. §6.2의 실제 순서는 상태·세대 확인 → MISSED를 보존하는 전이 CAS(실패하면 재조회) → 내부 `take()`에서 `t_begin` 기록, 열린 Job 설정, `started` 증가 → 메타데이터·페이로드를 워커 전용 사본에 복사 → 0 반환이다. `take()`는 공개 API가 아니며, 복사는 CAS 성공 뒤에 수행한다.
+- **Job 시작 상태 전이(`QUEUED → RUNNING`), 즉 처리 시작 확정**은 wait 내부의 CAS(compare-and-swap)로 수행한다. CAS는 읽어 둔 상태 워드와 현재 값이 같을 때만 새 값으로 바꾸는 원자적 조건부 갱신이다. 추가 큐·공개 API·스케줄러 연산도, 페이로드 복사도 아니다. §6.2의 실제 순서는 상태·세대 확인 → MISSED를 보존하는 전이 CAS(실패하면 재조회) → 내부 `take()`에서 `t_begin` 기록, 열린 Job 설정, `started` 증가 → 메타데이터·페이로드를 호출자가 준 `ev` 버퍼에 복사 → 0 반환이다. `take()`는 공개 API가 아니며, 복사는 CAS 성공 뒤에 수행한다.
 - QUEUED/RUNNING은 SHM Event 레코드의 논리적 생명주기이지 BPF DSQ 소속·현재 CPU 실행 여부가 아니다. 워커가 CPU에서 이전 Job을 처리하는 동안 다음 Event는 QUEUED일 수 있다. 시작된 Job의 RUNNING은 선점·스로틀·블로킹 중에도 종료 전까지 유지된다.
 
 - 워커 루프: `for (;;) { if (ttsched_evt_wait(&ev) < 0) { ttsched_init(); continue; } process(&ev); ttsched_evt_done(TTSCHED_EVT_COMPLETED); }`. `ttsched_evt_done()`은 생략할 수 없다. 완료로 간주하는 암묵 종료는 없다. 실패한 Job을 성공으로 기록할 수 있기 때문이다.

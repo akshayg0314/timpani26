@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 # HLD-008: Event-Driven Workload Support — 상위 설계 (High-Level Design)
 
 **날짜:** 2026-11-11
-**상태:** Draft (v5.2, 2026-11-16 리뷰 반영: §8.2 C·MIT 측정 절차 정정(C 등록 범위, 입력 제어 한계, MIT 관측 방법, C 대조 구간, `budget_used_us` 표시), §8.1 목록 들여쓰기, D-22~D-24 반영(§3, §7, §8.4, §8.5, §10). v5.1 — 2026-11-16 §8 적용 절차 보강: C·MIT 측정 절차, 재게시 의미. v5 — P1 Event–Job 계약 정렬(Issue #53): 한 Event 한 Job, 도달 기준 마감, 공통 Event 큐, DeadlineMonitor, 적용 방법론 재작성) — DDR-008(Proposal)의 D-01~D-24 확정을 전제로 함. D-22와 D-24는 v5.2에서 §3 컴포넌트 표, §7 결정 표, §8.4 배치 전제에 반영했다. D-23은 P2이며 P1 메커니즘을 바꾸지 않는다
+**상태:** Draft (v5.3, 2026-11-18 용어를 정식 문서와 맞추고 Project Leader(작성자)의 결정을 반영했다. 리뷰 정정: 예산 보충 실행 주체, D-22 행, 수용 판정 Mermaid 라벨, 게시 표현. v5.2, 2026-11-16 리뷰 반영: §8.2 C·MIT 측정 절차 정정(C 등록 범위, 입력 제어 한계, MIT 관측 방법, C 대조 구간, `budget_used_us` 표시), §8.1 목록 들여쓰기, D-22~D-24 반영(§3, §7, §8.4, §8.5, §10). v5.1 — 2026-11-16 §8 적용 절차 보강: C·MIT 측정 절차, 재게시 의미. v5 — P1 Event–Job 계약 정렬(Issue #53): 한 Event 한 Job, 도달 기준 마감, 공통 Event 큐, DeadlineMonitor, 적용 방법론 재작성) — DDR-008(Proposal)의 D-01~D-24 확정을 전제로 함. D-22와 D-24는 v5.2에서 §3 컴포넌트 표, §7 결정 표, §8.4 배치 전제에 반영했다. D-23은 P2이며 P1 메커니즘을 바꾸지 않는다
 **작성:** Human + AI
 **상위 문서:** [REQ-008](REQ-008-event-driven-workload-support.md), [SRS-008](SRS-008-event-driven-workload-support.md), [DDR-008](DDR-008-event-driven-workload-support.md)
 **관련 문서:** [P1 계약 보강 합의](P1-008-event-job-contract-amendment.md), [DDR-002](DDR-002-scheduling-architecture.md), [DDR-003](DDR-003-interface-protocol.md), [DDR-005](DDR-005-sched-ext-bpf-scheduler.md), [DDR-006](DDR-006-communication-architecture.md), [DDR-007](DDR-007-tt-cbs-integrated-scheduling.md), [DDR-011](DDR-011-runtime-table-update.md), [DDR-012](DDR-012-fault-management.md)
@@ -107,7 +107,7 @@ flowchart TB
 
 공통 용어의 정본은 [REQ-008 §2](REQ-008-event-driven-workload-support.md#2-개념-모델-공통-eventjob-모델-common-eventjob-model)다. **CBS 예산 관리**와 **Event/Job 관리**는 같은 L2 워커의 상호 보완적 책임이지 두 앱·클래스·모드나 앱의 두 부분이 아니다. DDR-001의 L2 분류는 그대로다.
 
-- **CBS 예산 관리**: 서버 윈도우 단위 예산 집행·예산 보충·스로틀을 담당한다. CPU 고정과 BPF 실행 구간 관측은 연관된 공통 메커니즘이며 명시적 Event 연결 없이도 유지된다.
+- **CBS 예산 관리**: 서버 윈도우 단위 예산 집행·예산 보충·스로틀을 담당한다. 집행과 보충은 BPF가 배정 CPU에서 수행하며 TIMPANI-N의 Replenisher는 kick만 한다(§3.3, D-04, D-07). CPU 고정과 BPF 실행 구간 관측은 연관된 공통 메커니즘이며 명시적 Event 연결 없이도 유지된다.
 - **Event/Job 관리**: 명시적 Event 연결을 통해 Event 수락·식별·큐, 명시적 Job 생명주기, 도달 기준 MIT 계수·마감 감시를 수행한다. 연결 없이는 필요한 Event 도달 시각·Job 기록을 얻지 못하며 BPF 실행 구간에서 추정하지 않는다.
 
 P1은 이 책임 구분을 위한 추가 분류·구성 플래그를 두지 않는다. source에 Event 기록이 없으면 DeadlineMonitor가 감시할 객체가 없는 것이며, 일시적인 게시 침묵이 앱을 재분류하지 않는다. 모든 L2에 같은 수용식을 적용하며 Event 기록이 없을 때 선언 D는 커널 활성화 기준 수용 판정 파라미터이지 감시되는 Job 마감이 아니다(MOD-011, D-21). 선택적 연결의 기존 호환성과 두 개의 Event 원천을 두지 않는 원칙(D-01)은 유지한다. P2의 미들웨어 경계·선행 태스크 완료 등 자동 연결은 ② 경로에 어댑터를 추가하는 것으로 수용한다(§11).
@@ -118,7 +118,7 @@ P1은 이 책임 구분을 위한 추가 분류·구성 플래그를 두지 않�
 flowchart LR
   SIS[SchedInfoServiceImpl] --> CONV[ConvertToClassifiedTasks plus validate_l2_params]
   CONV --> GS[GlobalScheduler]
-  GS --> AC[assign_cpus worst-fit plus admission pre-check]
+  GS --> AC[assign_cpus worst-fit plus 수용 판정 사전 확인]
   GS --> TT[place_tt_slots]
   GS --> BT[compute_tt_blocking B_tt per CPU]
   GS --> ADM[admit_l2_fifo one formula per L2 task]
@@ -270,7 +270,7 @@ $L_{del}^{max}$의 두 부분은 모두 **측정 목표**이며 증명된 최악
 2. $\delta_{ovr}$과 $L_{del}^{max}$은 측정값으로 성립한다.
 3. source의 도달은 MIT를 지킨다.
 4. Job은 블로킹하지 않는다(§8.1 6항). A-06은 이 식의 적용 조건이며 정확성 전제는 아니다. 블로킹하는 source는 마감을 감시하지만 수용식이 보장하지 않는다.
-5. 어댑터는 도달 시점에 post한다. 준 $t_{arr}$이 현재보다 이르면 그만큼 $D$가 소비된다.
+5. 어댑터는 도달 시점에 게시한다. 준 $t_{arr}$이 현재보다 이르면 그만큼 $D$가 소비된다.
 6. 각 Job의 CPU 수요가 선언한 $C_i$를 넘지 않는다(여유 있게 선언한다).
 7. 각 Job은 다음 도달 전에 워커가 `ttsched_evt_wait()`에서 잠들 만큼 빨리 끝난다(§4.3의 P-a 경계 사례).
 8. `tol`(§4.3)이 측정된 활성화 지터를 덮는다.
@@ -775,7 +775,7 @@ Job 기록은 같은 비트를 같은 뜻으로 쓰고, 자체 `outcome` 필드�
 | D-19 | 공통 Event 큐: 고정 크기 기록 링, 인라인 payload, 수락·넘침·닫기·세대 규칙, 포스트 컨텍스트 하나 | libttsched, SHM |
 | D-20 | 도달 기준 마감, DeadlineMonitor, 완료 시각 정의와 경합 규칙, 데몬 중단 중 동작 | TIMPANI-N, libttsched |
 | D-21 | 같은 L2 워커의 CBS 예산 관리와 Event/Job 관리의 책임 구분 | 문서, BPF, TIMPANI-O |
-| D-22 | TT 없는 CPU의 CBS 실행(TT 독립. 테이블 hyperperiod 표현은 OI-25) | TIMPANI-O 배치·수용 판정(B_tt = 0), TIMPANI-N 예산 보충·감시, BPF dispatch |
+| D-22 | TT 없는 CPU의 CBS 실행(TT 독립. 테이블 hyperperiod 표현은 OI-25) | TIMPANI-O 배치·수용 판정(B_tt = 0), TIMPANI-N 보충 kick·감시, BPF 예산 보충·dispatch |
 | D-23 | 마감 실패 사실과 원인·복구의 분리(P2. P1 메커니즘 변경 없음) | P1은 감지·계수·보고만. 원인 분류는 P2 |
 | D-24 | 앱 추상화와 cpuset 배치 전제 | 어댑터·libttsched, TIMPANI-N 바인딩(허용 CPU 확인) |
 
@@ -891,15 +891,15 @@ C에 들어가는 것과 들어가지 않는 것은 BPF의 예산 차감 기준�
 
 | Event 종류 | 입력 어댑터 경계 | 게시 위치 | Event/Job 관리 연결 방법 | MIT 산정 | P1 주의 |
 |:--|:--|:--|:--|:--|:--|
-| 미들웨어 메시지 콜백(SOME/IP event·field, DDS 샘플) | 미들웨어 수신 콜백(미들웨어 스레드) | 콜백에서 메시지 데이터를 인라인으로 post | Event 연결 | 송신 주기 − (송신 흔들림 + 전달 흔들림). DDS는 writer 주기 − 흔들림 | FCW가 이 경우다(§8.4). DDS 샘플 한 건은 post 한 번이다. 샘플을 한꺼번에 꺼내면 샘플마다 post한다. service·instance·event ID는 앱 안에만 있다 |
-| 소켓 datagram(UDP, Unix datagram) | 수신 스레드가 datagram 한 건을 읽은 직후 | 읽은 datagram마다 post. 워커는 wait | 명시적 Event 연결 | 송신자 규격의 최소 간격. 없으면 측정 | datagram 경계가 Event 경계다. 수신과 처리를 같은 스레드에서 하고 게시가 없으면 Event/Job 관리의 정보를 얻지 못한다(§8.5 샘플은 수신 스레드를 분리한다) |
-| 스트림 소켓(TCP 등) | 수신 스레드가 프레이밍을 마친 메시지 | 메시지마다 post | Event 연결 | 송신자 규격 | 메시지 경계(프레이밍)는 앱이 정한다. 경계가 없으면 Event를 정의할 수 없다 |
-| 타이머(timerfd 등 앱 타이머) | 타이머 만료를 읽은 스레드 | 만료마다 post. `t_arr`는 만료 시각(타이머 클록) | 타이머 스레드가 명시적으로 게시. 워커가 `read(timerfd)`만 직접 하면 Event/Job 관리의 정보를 얻지 못함 | 타이머의 최소 간격 | 엄격한 주기 작업은 L2가 아니라 L1 TT로 선언한다 |
-| pipe, eventfd | 메시지를 읽은 리더 스레드 | 메시지마다 post. eventfd의 카운터 값 n은 n번 post한다. 한 건으로 합치면 Event의 정의가 바뀌므로 명시한다 | Event 연결 | 쓰는 쪽의 최소 간격 | 파이프가 가득 차면 쓰는 쪽이 블로킹한다. 쓰는 쪽이 Job 안에 있는지 확인한다 |
-| 프로세스 내부 큐(다른 스레드가 만든 작업) | 생산 스레드가 작업을 만드는 지점 | 생산 스레드가 post한다(공통 큐 사용, 앱 큐 없음) | Event 연결 | 생산 스레드의 작업 생성 최소 간격 | 생산 스레드가 여럿이면 post 직렬화가 필요하다(다중 생산자는 P2) |
-| 선행 태스크의 완료(L1 TT 또는 다른 L2의 출력) | 선행 태스크가 출력을 공유 메모리나 큐에 쓴 직후 | 선행 태스크 스레드(또는 SHM 쓰기 권한이 있는 같은 호스트의 프로세스)가 post | Event 연결 | 선행이 TT이면 주기 − 완료 시점 흔들림 | post 비용(후보 1–2 µs)은 선행 태스크의 WCET에 넣는다. 선·후행의 자동 연계(어댑터 D)는 P2 |
-| 하드웨어 입력(GPIO 에지, UIO, input 장치) | 커널이 넘긴 fd를 읽는 사용자 스레드 | 읽은 이벤트마다 post | 사용자 스레드가 명시적으로 게시. 워커가 `read()`만 직접 하면 Event/Job 관리의 정보를 얻지 못함 | 디바운스 간격, 센서의 최대 발생률 | 인터럽트 처리 자체는 대상이 아니다. 대상은 그 뒤의 사용자 스레드다. 커널 시각을 `t_arr`로 쓰려면 측정이 필요하다 |
-| 하한이 불분명한 Event(진단 요청, 사용자 입력) | 수신 지점 | 수신마다 post | Event 연결 | 설계값: "이 간격까지는 마감을 보장한다" | 선언보다 촘촘한 도달은 MIT_VIOLATION으로 계수되고 뒤의 Job이 늦는다. 큐가 차면 E_FULL로 버리고 두 쪽이 버린 수를 센다 |
+| 미들웨어 메시지 콜백(SOME/IP event·field, DDS 샘플) | 미들웨어 수신 콜백(미들웨어 스레드) | 콜백에서 메시지 데이터를 인라인으로 게시 | Event 연결 | 송신 주기 − (송신 흔들림 + 전달 흔들림). DDS는 writer 주기 − 흔들림 | FCW가 이 경우다(§8.4). DDS 샘플 한 건은 게시 한 번이다. 샘플을 한꺼번에 꺼내면 샘플마다 게시한다. service·instance·event ID는 앱 안에만 있다 |
+| 소켓 datagram(UDP, Unix datagram) | 수신 스레드가 datagram 한 건을 읽은 직후 | 읽은 datagram마다 게시. 워커는 wait | 명시적 Event 연결 | 송신자 규격의 최소 간격. 없으면 측정 | datagram 경계가 Event 경계다. 수신과 처리를 같은 스레드에서 하고 게시가 없으면 Event/Job 관리의 정보를 얻지 못한다(§8.5 샘플은 수신 스레드를 분리한다) |
+| 스트림 소켓(TCP 등) | 수신 스레드가 프레이밍을 마친 메시지 | 메시지마다 게시 | Event 연결 | 송신자 규격 | 메시지 경계(프레이밍)는 앱이 정한다. 경계가 없으면 Event를 정의할 수 없다 |
+| 타이머(timerfd 등 앱 타이머) | 타이머 만료를 읽은 스레드 | 만료마다 게시. `t_arr`는 만료 시각(타이머 클록) | 타이머 스레드가 명시적으로 게시. 워커가 `read(timerfd)`만 직접 하면 Event/Job 관리의 정보를 얻지 못함 | 타이머의 최소 간격 | 엄격한 주기 작업은 L2가 아니라 L1 TT로 선언한다 |
+| pipe, eventfd | 메시지를 읽은 리더 스레드 | 메시지마다 게시. eventfd의 카운터 값 n은 n번 게시한다. 한 건으로 합치면 Event의 정의가 바뀌므로 명시한다 | Event 연결 | 쓰는 쪽의 최소 간격 | 파이프가 가득 차면 쓰는 쪽이 블로킹한다. 쓰는 쪽이 Job 안에 있는지 확인한다 |
+| 프로세스 내부 큐(다른 스레드가 만든 작업) | 생산 스레드가 작업을 만드는 지점 | 생산 스레드가 게시한다(공통 큐 사용, 앱 큐 없음) | Event 연결 | 생산 스레드의 작업 생성 최소 간격 | 생산 스레드가 여럿이면 게시 직렬화가 필요하다(다중 생산자는 P2) |
+| 선행 태스크의 완료(L1 TT 또는 다른 L2의 출력) | 선행 태스크가 출력을 공유 메모리나 큐에 쓴 직후 | 선행 태스크 스레드(또는 SHM 쓰기 권한이 있는 같은 호스트의 프로세스)가 게시 | Event 연결 | 선행이 TT이면 주기 − 완료 시점 흔들림 | 게시 비용(후보 1–2 µs)은 선행 태스크의 WCET에 넣는다. 선·후행의 자동 연계(어댑터 D)는 P2 |
+| 하드웨어 입력(GPIO 에지, UIO, input 장치) | 커널이 넘긴 fd를 읽는 사용자 스레드 | 읽은 이벤트마다 게시 | 사용자 스레드가 명시적으로 게시. 워커가 `read()`만 직접 하면 Event/Job 관리의 정보를 얻지 못함 | 디바운스 간격, 센서의 최대 발생률 | 인터럽트 처리 자체는 대상이 아니다. 대상은 그 뒤의 사용자 스레드다. 커널 시각을 `t_arr`로 쓰려면 측정이 필요하다 |
+| 하한이 불분명한 Event(진단 요청, 사용자 입력) | 수신 지점 | 수신마다 게시 | Event 연결 | 설계값: "이 간격까지는 마감을 보장한다" | 선언보다 촘촘한 도달은 MIT_VIOLATION으로 계수되고 뒤의 Job이 늦는다. 큐가 차면 E_FULL로 버리고 두 쪽이 버린 수를 센다 |
 
 **연결 방법과 책임의 관계.** 표준 블로킹만 쓰는 구조(표의 "워커가 직접 읽음" 경우)도 CBS 예산 관리, CPU 고정, 실행 구간 관측은 유지된다. 명시적 Event 연결 없이는 Event 도달 시각·Job 기록·Event 기준 마감 감시·Event 단위 수락과 넘침·MIT 계수를 얻지 못한다. 그런 구조를 Event 기준 마감 지원과 동등하다고 설명하거나 AC-008-14의 대상으로 쓰지 않는다. 앱의 분류는 바뀌지 않으며 같은 수용식에 포함된다(§3.6).
 
@@ -908,7 +908,7 @@ C에 들어가는 것과 들어가지 않는 것은 BPF의 예산 차감 기준�
 | 상황 | P1에서 다루는 법 | P2 |
 |:--|:--|:--|
 | 한 태스크가 여러 종류의 Event를 처리 | (a) 종류마다 워커 스레드와 source를 나눈다. 각자 `task_id`, MIT, C, D, T를 가진다. (b) 합쳐서 source 하나로 선언한다. MIT는 합쳐진 흐름에서 연속한 두 도달의 최소 간격, C는 종류별 최댓값. (b)는 MIT가 매우 작아질 수 있다 | 태스크당 다중 source(`ttsched_evt_open`의 source 지정 변형) |
-| Event 하나를 여러 태스크가 처리(fan-out) | 수신 스레드가 태스크마다 post한다. 태스크마다 독립된 source이며 독립된 서버다 | — |
+| Event 하나를 여러 태스크가 처리(fan-out) | 수신 스레드가 태스크마다 게시한다. 태스크마다 독립된 source이며 독립된 서버다 | — |
 | 처리 도중 응답을 기다려야 함 | 처리를 단계로 나누고, 응답 도달을 새 Event로 게시한다. 단계마다 Job 하나다. 단계 사이의 블로킹은 Job 안의 블로킹이므로 수용 판정의 보장 밖이다. 피하도록 안내한다 | — |
 | 여러 워커가 한 source를 나눠 처리(워커 풀) | 지원하지 않는다. source당 워커는 하나다 | 검토 대상 |
 
@@ -1087,3 +1087,4 @@ REQ-008 §11, SRS-008 §9, DDR-008 §3.3을 참조한다. HLD 수준 항목은 �
 | v5 | 2026-11-11 | P1 Event–Job 계약 보강 합의(Issue #53)에 맞춰 정렬. 한 Event 한 Job, 명시적 연결(게시·Event 대기·종료), 절대 마감 $t_{arr} + D$, 공통 Event 큐(SHM v2), DeadlineMonitor 신설, BPF를 실행 구간 관측과 예산 집행으로 한정(MIT 검사와 L2 DMISS 제거), 수용식 한 식과 가정, §8 계약·절차·Event 종류표·FCW 가이드·비-SOME/IP 산술 재작성, 리스크와 오픈 이슈 갱신. 설계 정렬이며 구현이나 검증이 아니다 |
 | v5.1 | 2026-11-16 | 개요(OVERVIEW-008) 리뷰 논의 반영. §8.1 4항에 재바인딩 경계의 재게시 의미(새 `gen`의 별개 Event, `t_arr` 기준 미정) 추가, 9항에서 측정 절차 참조. §8.2에 "C와 MIT 측정 절차"(자극 주입, C 포함·제외 범위, 측정 단계, `budget_used_us` 실행 구간 단위 한계) 추가. §10에 H-19(C 측정·여유율), H-20(재게시 `t_arr`) 추가. 설계 결정 변경은 없음 |
 | v5.2 | 2026-11-16 | 리뷰 반영. §3 표에 D-22·D-24를 반영했다(GlobalScheduler: TT 없는 CPU의 L2 배치·수용 판정, FR-O-022, FR-O-015 표현 주석, TableApplier: 바인딩 전 허용 CPU 확인, FR-N-033, Replenisher·DeadlineMonitor·BPF dispatch: TT 이벤트에 의존하지 않음, FR-N-032·FR-B-025). §7에 D-22~D-24 추가. §8.1 4항 하위 목록 들여쓰기 정정. §8.2: C 등록 범위를 §3.6 수용식에 맞춤, 입력 제어와 재생의 도구 한계, MIT 최소 간격의 관측 방법(`t_arr` 차), C 대조 구간, `budget_used_us` 제안 필드 표시. §8.4 스레드 배치(D-24, A-09). §8.5 AC-008-17 시험 구성. §10 H-8·H-19·H-20 참조 추가. API·프로토콜 변경은 없음(구현·검증 전) |
+| v5.3 | 2026-11-18 | 3e307da(2026-11-17) 변경을 반영했다. 승인·승인식은 수용 판정·수용식으로, post는 게시로 바꾸는 등 용어를 정식 문서와 맞췄다. 예산 전용 L2 class는 CBS 예산 관리와 Event/Job 관리의 책임 구분으로 바꾸었고 class나 플래그는 두지 않는다(D-21). wait 안에서 Job 시작을 확정하며 별도 공개 취득 API는 없다. P1 정책 경계와 워커 TID 불변조건을 추가했고(D-24), 타이머 깨움 대안 비교(F-10, OI-22)를 넣었다. 이 결정들은 Project Leader(작성자)의 결정이다. 2026-11-18 리뷰 정정: 예산 보충 실행 주체를 BPF로 명시하고 D-22 행, Mermaid 라벨, 게시 표현을 정리했다. 이전 이력 행의 용어도 새 용어로 바꿨다. REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, LLD-008 v5.2와 맞춘다. |

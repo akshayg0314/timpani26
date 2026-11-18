@@ -5,8 +5,8 @@ SPDX-License-Identifier: MIT
 
 # SRS-008: Event-Driven Workload Support 소프트웨어 요구사항 명세 (SRS)
 
-**날짜:** 2026-11-11 (최초 작성 2026-11-09, Last Updated: 2026-11-16)
-**상태:** Draft (v4.1 — P1 Event-Job 계약 보강 반영, Issue #53)
+**날짜:** 2026-11-11 (최초 작성 2026-11-09, Last Updated: 2026-11-18)
+**상태:** Draft (v4.2 — P1 Event-Job 계약 보강 반영, Issue #53)
 **작성:** Human + AI
 **상위 문서:** [REQ-008](REQ-008-event-driven-workload-support.md), [SRS-000](SRS-000-timpani-system.md)
 **관련 문서:** [P1 계약 보강 합의](P1-008-event-job-contract-amendment.md), [DDR-001](DDR-001-workload-model.md), [DDR-003](DDR-003-interface-protocol.md), [DDR-004](DDR-004-resource-allocation.md), [DDR-005](DDR-005-sched-ext-bpf-scheduler.md), [DDR-006](DDR-006-communication-architecture.md), [DDR-007](DDR-007-tt-cbs-integrated-scheduling.md), [DDR-011](DDR-011-runtime-table-update.md), [DDR-012](DDR-012-fault-management.md)
@@ -29,7 +29,7 @@ SPDX-License-Identifier: MIT
 - 핵심(P1): (1) 어댑터·워커의 게시(post)·Event 대기(wait)·종료(done) 호출로 Event 게시, wait 내부의 Job 시작, Job 종료를 명시하고, 식별자 `(gen, seq)`, 생명주기 상태, 마감 결과(MISSED)를 서로 분리한다(FR-L-009~012). (2) 절대 마감은 도달 시각 + D로 수락 시 고정된다. TIMPANI-N의 DeadlineMonitor가 완료를 기다리지 않고, 큐 대기·실행·선점·스로틀 중에도 마감 경과를 감지하며 Job당 한 번 판정한다(FR-N-027, FR-N-028). (3) BPF는 CBS 예산 집행, CPU 고정, TT 보호, 실행 구간 관측만 담당하며 L2 마감과 MIT를 판정하지 않는다(FR-B-024). (4) 수용 판정은 한 식을 모든 L2 태스크에 적용하며, 식의 가정을 명시한다(FR-O-013). (5) CBS 예산 관리와 Event/Job 관리는 같은 L2 워커의 상호 보완적 책임이다. 명시적 Event 연결 없이도 CBS 예산 관리·CPU 고정·실행 구간 관측은 유지되지만 Event/Job 관리의 정보는 얻지 못한다(FR-G-003). (6) 감지·보고·전달 지연(TMG-014~016)은 후보값이며 측정으로 확정하고, 필수 통계는 트레이싱과 무관하게 유지한다(FR-N-030).
 - 승인 대상: 공개 API(libttsched Event 연결 API), SHM 레이아웃, proto 필드 추가(FaultInfo 카운트·표식·세대), 빌드 상수(큐 깊이, 페이로드 상한)는 프로젝트 리더 승인이 필요한 제안이다.
 - P2로 미룬 것: 다중 생산자 게시와 큰 페이로드, SHM의 소스별 격리와 데몬 하트비트, 감시의 이벤트 구동 깨움, 감시 스레드와 Replenisher의 병합, EDF 순서, 태스크 단위 시간 클래스, 거부 사유 코드, NodeStatus 통계, watchdog·깨움 지연 폴트, HRTICK.
-- 상태: Draft v4.1(P1 계약 보강 반영, 하위 체인 정합 반영). 설계 단계이며 구현이나 검증이 끝났다는 뜻이 아니다. 수치는 후보값이다.
+- 상태: Draft v4.2(P1 계약 보강 반영, 하위 체인 정합 반영). 설계 단계이며 구현이나 검증이 끝났다는 뜻이 아니다. 수치는 후보값이다.
 
 ---
 
@@ -543,7 +543,7 @@ REQ-008 §8의 가정과 제약을 계승하며, 다음과 같이 바꾸거나 �
 | OI-19 | 제안 승인: FR-L-001, IF-L-002, IF-L-003, IF-L-004, IF-PO-005, IF-ON-004, FR-N-031(e). 승인 전에는 설계 확정이 아니다 |
 | OI-20 | 해석 확인 1(완료 시각 판정과 재시도 규칙): FR-L-011(c)(d), FR-N-028 |
 | OI-21 | 해석 확인 2(TIMPANI가 마감 이전에 닫은 Event는 실패가 아님): FR-N-028, FR-L-012(c) |
-| OI-22 | DeadlineMonitor PoC(스캔 비용과 지터, 이벤트 기반 깨움, 감시 스레드와 Replenisher 병합): FR-N-027(a)(b), TMG-014 |
+| OI-22 | DeadlineMonitor PoC(스캔 비용과 지터, 가장 이른 절대 마감의 단일 타이머 대안(F-10)과 주기 스캔 비교, 감시 스레드와 Replenisher 병합): FR-N-027(a)(b), TMG-014 |
 
 > 요구사항 행의 "상위" 열에 적힌 `AC-08`은 AC-008-08의 약기다.
 
@@ -599,6 +599,7 @@ P1 계약 보강에서 남는 확인 항목은 DDR-008 open issues에서 관리�
 
 | 버전 | 날짜 | 변경 요약 |
 |:--|:--|:--|
+| v4.2 | 2026-11-18 | 2026-11-17 개정(3e307da): 용어를 통일했다(승인→수용 판정, 승인식→수용식). 예산 전용 L2 태스크 클래스를 CBS 예산 관리와 Event/Job 관리의 책임 구분으로 바꾸고 클래스·플래그는 두지 않는다(D-21). Job 시작 확정은 wait 안에서 하며 별도 공개 취득 API는 없다. 이 범위 결정은 Project Leader(작성자)의 결정이다. 2026-11-18 리뷰 정정: OI-22 행에 단일 타이머 대안(F-10)과 주기 스캔 비교를 넣어 REQ-008 OI-22와 맞췄다. 이전 이력 행의 용어도 새 용어로 바꿨다. DDR-008 v3.3, HLD-008 v5.3, LLD-008 v5.2, REQ-008 v5.2와 맞춤 |
 | v4.1 | 2026-11-16 | 하위 체인 정합(리뷰 반영, DDR-008 v3.2·HLD-008 v5.2·LLD-008 v5.1과 맞춤). **신규**: FR-O-022(TT 없는 CPU의 L2 배치·수용 판정, $B_{tt} = 0$), FR-N-032(백업 보충·마감 감시·재식별의 TT 독립 동작), FR-N-033(바인딩 전 배정 CPU의 허용 CPU 집합 확인과 명시적 실패), FR-B-025(TT 없는 CPU의 BPF dispatch와 slice 상한), §7 A-09, §8 추적 행(CBS-007, CBS-008, AC-008-17~19, A-09). **변경**: FR-O-015에 테이블 형식 값 해석 문장 추가(D-22, 표현 변경은 OI-25), §1.5 P1·P2 행에 신규 ID와 P2 범위 주석 추가, §9 열린 항목에 OI-23~25 반영. 기존 요구의 요구 내용은 바꾸지 않았다. 설계 제안이며 구현·검증 전이다. 수치는 후보값이다. |
-| v4 | 2026-11-11 | P1 Event-Job 계약 보강 반영(Issue #53, `P1-008-event-job-contract-amendment.md`). **변경**: 수락한 Event 한 건 = Job 한 건, 어댑터·워커의 게시·Event 대기·종료 호출과 Job 경계, 식별자 `(gen, seq)`와 생명주기·MISSED 분리, 절대 마감 = 도달 시각 + D, DeadlineMonitor 기반 마감 감지와 Job당 한 번 판정, BPF의 실행 구간 관측 전환(L2 마감 실패와 MIT 판정 제거), CBS 예산 관리와 Event/Job 관리의 책임 구분, 단일 수용식과 가정 목록, Event source 활성화·닫기·세대 규칙, 필수 통계의 트레이싱 독립화, 감지·보고·전달 지연 후보값(TMG-014~016). **신규**: FR-G-003, FR-L-009~012, FR-N-027~031, FR-B-024, IF-L-004, TMG-014~016. **철회**: FR-B-006, FR-B-020, FR-B-021, TMG-005, OI-10. **종결**: OI-1, OI-17(명시적 Job 경계로 대체). **§7 추가**: C-08, C-09(REQ-008 C-08, C-09와 같은 내용). 설계 단계이며 구현이나 검증이 끝났다는 뜻이 아니다. 수치는 후보값이다. |
+| v4 | 2026-11-11 | P1 Event-Job 계약 보강 반영(Issue #53, `P1-008-event-job-contract-amendment.md`). **변경**: 수락한 Event 한 건 = Job 한 건, 어댑터·워커의 게시·Event 대기·종료 호출과 Job 경계, 식별자 `(gen, seq)`와 생명주기·MISSED 분리, 절대 마감 = 도달 시각 + D, DeadlineMonitor 기반 마감 감지와 Job당 한 번 판정, BPF의 실행 구간 관측 전환(L2 마감 실패와 MIT 판정 제거), 예산 전용 L2 태스크 클래스, 단일 수용식과 가정 목록, Event source 활성화·닫기·세대 규칙, 필수 통계의 트레이싱 독립화, 감지·보고·전달 지연 후보값(TMG-014~016). **신규**: FR-G-003, FR-L-009~012, FR-N-027~031, FR-B-024, IF-L-004, TMG-014~016. **철회**: FR-B-006, FR-B-020, FR-B-021, TMG-005, OI-10. **종결**: OI-1, OI-17(명시적 Job 경계로 대체). **§7 추가**: C-08, C-09(REQ-008 C-08, C-09와 같은 내용). 설계 단계이며 구현이나 검증이 끝났다는 뜻이 아니다. 수치는 후보값이다. |
 | v3 | 2026-11-10 | REQ-008 v4 반영. 공통 Event/Job 모델, 관측 어댑터 K·M(BPF 커널 관측과 라이브러리 마커), 배치 소비(`n_events`), 활성화 기준 MIT 검사, 활성화–완료 기반 DMISS 판정을 담은 9209bc5 계약. v4에서 대체되었다. |
