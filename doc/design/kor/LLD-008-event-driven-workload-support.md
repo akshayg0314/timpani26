@@ -130,7 +130,7 @@ message TaskInfo {
 enum FaultType {
   UNKNOWN = 0;
   DMISS = 1;           // L2: an Event's Job was still open after its absolute deadline t_arr + D (once per Job)
-  BUDGET_EXCEED = 2;   // informational: CBS budget exhausted (once per throttle episode)
+    BUDGET_EXCEED = 2;   // informational: CBS throttle entry (once per episode)
   WATCHDOG = 3;        // reserved (P2)
   MIT_VIOLATION = 4;   // arrivals closer than min_inter_arrival_us (counted at the adapter boundary, one report per T_s)
 }
@@ -414,7 +414,7 @@ $C_i + B_{tt}(k, D_i) + L_{del,max} + \sum_{j \ne i} (C_j + \delta_{ovr}) \le D_
 3. source의 도달은 MIT를 지킨다.
 4. Job은 블로킹하지 않는다(§1.2).
 5. 어댑터는 도달 시점에 게시한다. 공급된 `t_arr`이 더 이르면 그만큼 $D$를 소비한다.
-6. 각 Job의 CPU 수요는 선언 예산 $C_i$보다 작다(예산은 여유를 두고 선언한다).
+6. 활성화부터 실제 수면까지의 차감 실행 시간(대기 진입 비용 포함)은 선언 예산 $C_i$ 이하이다(예산 여유 권고).
 7. 각 Job은 다음 도달 전에 워커가 잠들 만큼 일찍 끝난다(§4.5, P-a 경계 사례).
 8. `tol`(`CBS_ACT_TOL_US`)은 측정된 활성화 지터를 덮는다.
 
@@ -531,7 +531,7 @@ struct CbsState {   /* unchanged (D-04); the fields are written by BPF only, exc
     __u64 replenish_at_ns;    /* END of the current replenishment window (D-04); 0 = no window yet. Written by BPF only */
     /* ---- 008 additions ---- */
     __u32 exec_frac_ns;       /* sub-µs carry between stops (0..999) */
-    __u32 throttle_episodes;  /* incremented on remaining 1→0 transition */
+    __u32 throttle_episodes;  /* incremented on entry to the throttled DSQ */
     __u32 throttled;          /* 1 while the task waits in dsq_throttled (set/cleared in enqueue, cleared at promotion) */
     __u32 _pad;
 };
@@ -667,17 +667,16 @@ static __always_inline void job_fsm_on_running(struct TaskMeta *m, __u64 now)
     if (m->job_state == JOB_ACTIVE && m->t_start_ns == 0) m->t_start_ns = now;   /* FR-B-005 */
 }
 
-/* returns µs charged; updates CbsState; sets *throttled_now on 1→0 transition */
-static __always_inline __u32 cbs_charge(struct CbsState *c, __u64 now, __u8 *throttled_now)
+/* Charge CPU time only; exhaustion does not start a throttle episode. */
+static __always_inline __u32 cbs_charge(struct CbsState *c, __u64 now)
 {
-    *throttled_now = 0;
     if (c->exec_start_ns == 0) return 0;
     __u64 total = (now - c->exec_start_ns) + c->exec_frac_ns;
     __u32 us = (__u32)(total / 1000ULL);
     c->exec_frac_ns = (__u32)(total % 1000ULL);               /* FR-B-012: ns carry */
     c->exec_start_ns = 0;
     if (c->remaining_us == 0) return us;
-    if (us >= c->remaining_us) { c->remaining_us = 0; c->throttle_episodes++; *throttled_now = 1; }
+    if (us >= c->remaining_us) c->remaining_us = 0;
     else c->remaining_us -= us;
     return us;
 }
@@ -696,6 +695,8 @@ static __always_inline int job_fsm_on_quiescent(struct TaskMeta *m)
 - 헤더 내용이 바뀌었으므로 호스트 테스트 대상도 바뀐다(§5.8, `JobFsmTest`).
 
 ### 4.4 ops 구현
+
+**단독 runnable 경로.** Linux 6.12/6.13은 다른 후보가 없으면 `SCX_OPS_ENQ_LAST` 없이 슬라이스가 만료된 `prev`를 계속 실행할 수 있다. `stopping`에서 슬라이스를 0으로 만드는 것만으로는 이 경로를 막지 못한다. 아래 의사코드는 두 버전에서 이 옵션으로 만료 뒤 enqueue를 거치게 한다. 마지막 CBS 태스크가 실행 가능 큐로 들어갈 때에는 재스케줄을 요청하고, 스로틀된 태스크는 기존 보충 경로로만 다시 실행된다. 이 옵션은 전체 SCX 클래스에 적용되므로 TT와 BE 및 fallback enqueue의 `SCX_ENQ_LAST` 처리도 구현 시 검증한다(실행 가능한 작업만 재스케줄하고 TT 게이트는 유지). 다른 지원 커널은 같은 보장을 하는 경로를 해당 API에서 확인한다. 타깃 미검증 의사코드다.
 
 ```c
 SEC("struct_ops/select_cpu")
@@ -721,30 +722,48 @@ void BPF_PROG(runnable, struct task_struct *p, u64 enq_flags)
     if (c && !cbs_on_activation(c, now)) m->job_flags |= JOB_FLAG_CARRYOVER; /* D-04 rule 1; no fresh budget → mark the interval (PRT-007 (b)) */
 }
 
+/* SCX_ENQ_LAST is delivered for the previous task on this CPU. */
+static __always_inline void enqueue_global_ready(struct task_struct *p, u64 flags)
+{
+    scx_bpf_dispatch(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, flags);
+    if (flags & SCX_ENQ_LAST)
+        scx_bpf_kick_cpu(bpf_get_smp_processor_id(), 0);
+}
+
 SEC("struct_ops/enqueue")
 void BPF_PROG(enqueue, struct task_struct *p, u64 enq_flags)
 {
     struct TaskMeta *m = meta_of(p);
-    if (!m) { scx_bpf_dispatch(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, enq_flags); return; }
+    if (!m) { enqueue_global_ready(p, enq_flags); return; }
     if (m->scheduling_type == SCHED_TYPE_TT) { /* unchanged: LOCAL_ON | acpu + PREEMPT kick */ return; }
     if (m->scheduling_type == SCHED_TYPE_CBS) {
         __u32 cpu = m->assigned_cpu;
-        if (!cpu_is_isolated(cpu)) { scx_bpf_dispatch(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, enq_flags); return; }
+        if (!cpu_is_isolated(cpu)) { enqueue_global_ready(p, enq_flags); return; }
         __u64 key = cbs_key_from_meta(m);
         struct CbsState *c = bpf_map_lookup_elem(&cbs_map, &key);
-        if (!c) { scx_bpf_dispatch(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, enq_flags); return; }
+        if (!c) { enqueue_global_ready(p, enq_flags); return; }
         __u64 flags = cbs_enqueue_flags(enq_flags);
         /* No refill here (D-04 rule 4). The old cbs_lazy_replenish() call is removed. */
         if (c->remaining_us == 0) {                                          /* throttled: wait for the window end */
-            m->job_flags |= JOB_FLAG_THROTTLED; c->throttled = 1;
+            m->job_flags |= JOB_FLAG_THROTTLED;
+            if (!c->throttled) {
+                c->throttled = 1;
+                c->throttle_episodes++;
+                emit_fault(m, FAULT_BUDGET_EXCEED, c->replenish_at_ns, bpf_ktime_get_ns());
+            }
             scx_bpf_dsq_insert_vtime(p, dsq_throttled(cpu), SCX_SLICE_DFL, c->replenish_at_ns, flags);
         } else {                                                             /* ready: activation order (D-08, FR-B-016) */
             c->throttled = 0;
             scx_bpf_dsq_insert_vtime(p, dsq_cbs(cpu), SCX_SLICE_DFL, m->queue_key_ns, flags);
+            if (enq_flags & SCX_ENQ_LAST)
+                scx_bpf_kick_cpu(cpu, 0);  /* ready work needs another scheduling cycle */
         }
         return;
     }
     scx_bpf_dispatch(p, DSQ_BE, SCX_SLICE_DFL, enq_flags);
+    /* BE is eligible only on non-isolated CPUs; do not bypass the dispatch gate. */
+    if ((enq_flags & SCX_ENQ_LAST) && !cpu_is_isolated(bpf_get_smp_processor_id()))
+        scx_bpf_kick_cpu(bpf_get_smp_processor_id(), 0);
 }
 
 static __always_inline void promote_throttled_if_replenished(__u32 cpu, __u64 now)
@@ -815,19 +834,14 @@ void BPF_PROG(stopping, struct task_struct *p, bool runnable)
         __u64 key = cbs_key_from_meta(m);
         struct CbsState *c = bpf_map_lookup_elem(&cbs_map, &key);
         if (c) {
-            __u8 throttled_now;
-            m->budget_used_us += cbs_charge(c, now, &throttled_now);
-            if (throttled_now) {                                             /* FR-B-013: once per episode */
-                /* replenish_at_ns (window end) is left unchanged; dispatch promotes once now >= replenish_at_ns (D-04 rule 3).
-                 * If the window has already ended, the next dispatch on this CPU promotes at once. */
-                m->job_flags |= JOB_FLAG_THROTTLED;
-                emit_fault(m, FAULT_BUDGET_EXCEED, c->replenish_at_ns, now);
-            }
+            m->budget_used_us += cbs_charge(c, now);
+            if (runnable && c->remaining_us == 0)
+                p->scx.slice = 0;  /* avoid the local DSQ head on preemption */
         }
         return;
     }
     /* TT path: unchanged (mark_tt_not_runnable + current_slot deadline check, DDR-012).
-     * The early-DMISS judgement that used to run here for L2 tasks is removed (D-20). The runnable argument is no longer used. */
+     * The early-DMISS judgement that used to run here for L2 tasks is removed (D-20). */
 }
 
 SEC("struct_ops/quiescent")
@@ -867,7 +881,7 @@ int timpani_replenish_kick(struct ReplenishKickArgs *args)
 
 SEC(".struct_ops.link")
 struct sched_ext_ops timpani_ops = {
-    .flags = SCX_OPS_SWITCH_PARTIAL,
+    .flags = SCX_OPS_SWITCH_PARTIAL | SCX_OPS_ENQ_LAST, /* Linux 6.12/6.13 */
     .init = (void*)init, .init_task = (void*)init_task, .exit_task = (void*)exit_task,
     .select_cpu = (void*)select_cpu, .enqueue = (void*)enqueue, .dispatch = (void*)dispatch,
     .runnable = (void*)runnable, .running = (void*)running, .stopping = (void*)stopping,
@@ -888,7 +902,7 @@ struct sched_ext_ops timpani_ops = {
 - `job_fsm.h`는 `__always_inline`·고정폭 타입만 사용하며 `bpf_helpers.h` 미포함 → 호스트 컴파일 가능.
 - 실행 구간의 한계(REQ-008 §2, DDR-008 D-02): 미소비 Event가 있어 `ttsched_evt_wait()`가 수면 없이 복귀하면(R3) `quiescent`가 호출되지 않으므로 두 연속 Job은 **하나의 실행 구간**으로 관측된다. BPF는 Job 경계를 알 수 없다. Job 경계는 워커가 `wait`/`done`으로 알리며 SHM Job 로그에 기록된다(§5.4(a), §5.6). 실행 구간 레코드와 Job 기록은 `t_arr`·`t_begin`·`t_end` 기준으로 시각만 대응시킨다(DDR-008 D-16). 대응은 Job이 블로킹하지 않을 때 1:1이다.
 - 연속 Job의 예산: 두 번째 Job이 같은 실행 구간 안에서 시작하면 새 예산을 받지 않는다(D-04 규칙 4). 구간이 끝나기 전 남은 예산을 함께 쓴다. 그 결과 뒤의 Job이 스로틀되거나 마감을 놓칠 수 있다. 이는 방지가 아니라 보고한다.
-- 예산 차감의 단위: `running`~`stopping` 사이의 on-CPU 시간을 ns로 누산해 µs로 차감한다. 차감은 활성화부터 워커가 잠들 때까지(대기 진입 시스템 콜 경로 포함)의 실행을 모두 포함하며, 차감액이 잔여 예산에 **도달하면**(`us >= remaining_us`) 스로틀한다. 따라서 선언 예산 $C_s$는 한 Job이 실행 구간들에 걸쳐 쓰는 차감 실행 시간의 합보다 커야 한다(수용 판정 가정 6, DDR-008 D-04 (P-a)). 같거나 작으면 대기 진입 직전에 스로틀될 수 있다.
+- 예산 차감은 `running`~`stopping`의 on-CPU 시간을 ns로 누산해 µs로 반영한다. 잔여 예산은 0에서 포화하며 대기 진입 비용도 차감한다. 정확히 소진하고 잠들면 차감만 한다. 계속 runnable이거나 활성화 보충을 적용한 깨움에도 잔여 예산이 0이면 enqueue에서 추가 실행을 차단한다. `replenish_at_ns`는 기존 윈도우 끝을 유지하며 보고와 계수는 실제 스로틀 진입당 한 번이다.
 - 위반 후 동작(윈도우 용어): 윈도우가 끝나기 전에 활성화된 실행 구간은 `JOB_FLAG_CARRYOVER`를 갖고 남은 예산으로 실행된다. 도달이 MIT보다 가까웠거나 Job이 마감을 넘긴 경우가 여기에 해당한다. 서버가 도달 위상으로 돌아오는 과정은 DDR-008 D-04 "위반 후 동작"을 따른다. 그 예시는 윈도우 타임라인으로 기술한다(§5.8).
 - 블로킹 Job: Job 중 블로킹하면 잠듦으로 실행 구간이 나뉜다. 블로킹 뒤의 깨움은 커널 활성화이며 열린 윈도우 안에 있으면 예산을 새로 주지 않는다(`cbs_on_activation`, 단 CARRYOVER로 표시). 블로킹 Job의 나뉜 구간은 Job 경계가 아니다. Job 경계는 SHM Job 로그가 전달한다. 수용 판정은 블로킹 Job에 보장을 주지 않는다(§3.3 가정 4).
 
@@ -1552,7 +1566,8 @@ volatile struct timpani_ttsched_shm* shm() const;                              /
 | `JobFsmTest.RunnableStartsIntervalOnlyFromWaiting` / `PreemptionInsideIntervalDoesNotRestart` / `SleepEndsInterval` / `BlockingResumeStartsNewInterval` | `job_fsm.h` (FR-B-001~003, 실행 구간) |
 | `JobFsmTest.NoMitCheckOnShortSpacing` (간격이 MIT보다 짧아도 상태와 플래그는 변하지 않는다) / `NoDeadlineVerdictOnSleep` (늦은 잠듦에도 DMISS 기록이 없다) | FR-B-024 (D-05, D-20) |
 | `CbsChargeTest.NanosecondCarry` / `ThrottleTransitionOnce` | FR-B-012/013 |
-| `CbsWindowTest.ConformingActivationAlwaysRefills` (DDR-008 D-04 반례: T=18 ms, C=2 ms, 활성화 16.0/34.0 ms → 스로틀 없음) / `EarlyActivationKeepsRemainingAndMarksCarryover` / `ToleranceAbsorbsWakeJitter` (간격 17.95 ms: 보충) / `AfterViolationWindowShiftsThenRecoversWithSlack` (D-04 "위반 후 동작" 타임라인: 0/15/33 ms, 여유가 있으면 복귀) / `ExactBudgetJobIsThrottled` (차감액 = $C_s$ 경계) / `NoRefillWhileActiveAndNotThrottled` / `PromotionRefillsAndOpensWindowFromNow` / `ConsumptionPerWindowBounded` | `cbs_on_activation`, `cbs_try_promote` (FR-B-014/017) |
+| `CbsWindowTest.ConformingActivationAlwaysRefills` (DDR-008 D-04 반례: T=18 ms, C=2 ms, 활성화 16.0/34.0 ms → 스로틀 없음) / `EarlyActivationKeepsRemainingAndMarksCarryover` / `ToleranceAbsorbsWakeJitter` (간격 17.95 ms: 보충) / `AfterViolationWindowShiftsThenRecoversWithSlack` (D-04 "위반 후 동작" 타임라인: 0/15/33 ms, 여유가 있으면 복귀) / `NoRefillWhileActiveAndNotThrottled` / `PromotionRefillsAndOpensWindowFromNow` / `ConsumptionPerWindowBounded` | `cbs_on_activation`, `cbs_try_promote` (FR-B-014/017) |
+| `CbsThrottleTest.ExactBudgetThenSleepDoesNotThrottle` (잔여 0, 진입·발행 없음) / `ExactBudgetStillRunnableThrottles` (추가 실행 차단, 진입·발행 한 번) / `WakeWithoutEligibleRefillThrottles` / `WakeWithEligibleRefillDoesNotThrottle` | 차감 및 enqueue 상태 전이 (FR-B-013/014, AC-008-03). 실제 커널의 콜백과 재스케줄 경로는 §10의 타깃 시험으로 확인한다. |
 | `QueueOrderTest.RequeueKeepsActivationRank` / `PromotedJobGoesToTail` | `queue_key_ns` (FR-B-016) |
 | `TaskRegistryTest.ResolvesLateThread` (fork+prctl 후 ≤1 s) / `DetectsExit` / `BinderMayReenterRegistry` | FR-N-003/004 |
 | `TaskRegistryTest.StaleExitRecordIgnored` (bind_gen이 다른 종료 기록은 추적 중인 새 바인딩을 비활성화하지 않는다) / `ExitRecordOfCurrentBindingDeactivates` | FR-N-004, FR-N-029 |
@@ -2387,7 +2402,7 @@ int main(int argc, char* argv[]) {
 | 도달 → 첫 실행 (delivery, $L_{del,max}$ = $L_{post}$ + $L_{wake}$) | 위 + 런큐 → 첫 실행(TIM-001, $L_{wake}$ = 50 µs 후보, 유휴이고 TT 없는 CPU) | ≤ 100 µs 후보 (수용식의 $L_{del,max}$) | Job 로그 `t_arr`와 실행 구간의 `t_start`(0 제외) 차 | TMG-016, TIM-011, §3.3 |
 | 활성화 → 실행 개시 (TT 중) | 위 + $B_{tt}$ (TT 연속 점유) | ≤ $B_{tt}$ + 50 µs (후보) | 실행 구간 `t_start − t_act`를 TT 슬롯 기록과 대조 | TMG-002 |
 | 윈도우 끝(`replenish_at`) → 실행 가능 (스로틀된 서버, 유휴 CPU) | 깨움 지터 → `bpf_prog_test_run` → `kick_cpu` → `dispatch` promote(≤ 16 반복) | ≤ 100 µs p99.99 (후보) | Replenisher 로그와 `remaining_us` 복원 시각 | TMG-003 |
-| 예산 초과 | 슬라이스 만료 = 틱 경계(HZ=1000: 최대 1 ms) + `stopping` 차감 | δ_ovr = 1 ms (후보, nohz_full에서 틱 재시작 지연 측정) | BUDGET_EXCEED 시각과 `budget_used_us`, 틱 주기 대조 | TMG-004, §3.3 δ_ovr |
+| 예산 초과 | 슬라이스 만료 = 틱 경계(HZ=1000: 최대 1 ms) + `stopping` 차감 | δ_ovr = 1 ms (후보, nohz_full에서 틱 재시작 지연 측정) | 윈도우별 실제 on-CPU 누산 시간과 예산 비교(스로틀 없이 수면한 경우 포함); 틱 주기 대조 | TMG-004, §3.3 δ_ovr |
 | 마감 감지 (TIM-009) — t_dl → MISSED 설정 | DeadlineMonitor 주기 스캔(1 ms 후보) + 감시 스레드 깨움 지터. 대기·실행·스로틀·유휴 모두 포함 | ≤ 2 ms 후보 (scan 1 ms + 지터) | 미스 기록의 `t_detect − t_dl`; 큐 대기, 스로틀, 유휴 CPU 시나리오별 | TMG-014, §5.9 |
 | 마감 실패 보고 (TIM-010) — MISSED 설정 → 보고 수신 | FaultMonitor 폴링(≤ 100 ms) → gRPC Write → O 수신 | ≤ 200 ms 후보 (보내진 보고에 대해서만) | 미스 기록 `t_detect`와 O 수신 로그 타임스탬프 차 | TMG-015, §5.5 |
 | 완료 수집 지연 | 워커 종료 뒤 TIMPANI-N 수집까지 | 바운드 없음. 마감 판정에 영향이 없다(§1.2) | Job 로그 `t_end`로 판정하므로 측정 대상이 아니다 | PRT-009 (수집 지연은 마감 실패가 아니다). TMG-005는 철회 |
@@ -2441,13 +2456,15 @@ int main(int argc, char* argv[]) {
 
 ## 10. 테스트 훅 및 수용 기준 매핑
 
+`SCX_ENQ_LAST` 회귀 시험은 다른 runnable 태스크가 없는 상태에서 큐별로 수행한다. 비격리 CPU의 BE와 전역 fallback에서 마지막 태스크가 외부 깨움 없이 다시 실행되고, TT는 기존 배정 CPU와 슬롯 보호를 유지해야 한다. BE 시험은 기존 배치 정책상 BE를 소비할 수 있는 비격리 CPU에서 수행한다. 스로틀된 CBS는 이 재스케줄 경로가 아니라 보충 후 승격으로만 다시 실행되어야 한다.
+
 AC-008-01 ~ 19 전체를 매핑한다. AC-008-13 ~ 16은 신규다. AC-008-17 ~ 19는 v5.1에서 추가했다. 수단은 `evttask`(§7.1), FCW(§7.2), `mock_pullpiri.py`, GTest 또는 절차다. "훅"은 판정에 쓰는 기록이나 계수다. Job 로그는 `(gen, seq)`로 Event와 대응한다.
 
 | AC-008 | 수단 | 훅 |
 |:--|:--|:--|
 | 01 (한 Event–한 Job, 1:1) | (a) `evttask --source timerfd`, `udp`, `pipe`, `self` 각 100,000 Event, MIT 준수. (b) 같은 조건에서 생성기 로그 수 확인 | 정지 상태에서 `completed + discarded + cancelled + abandoned = accepted`(I1). 생성기의 `(gen, seq)` 집합 = Job 로그의 `(gen, seq)` 집합(완료·폐기분). `started = completed + discarded + abandoned`. MIT를 어기는 구간이 없으므로 `mit_viol = 0` |
 | 02 (TT 무회귀) | TT 테이블 고정 + `evttask --burst` A/B, 1 h | 추적의 tt 행 지터 p99.99, FaultMonitor의 L1 DMISS = 0 |
-| 03 (CBS 예산 집행, BUDGET_EXCEED) | `evttask --overrun-us`, `fcw_consumer -be` | `cbs_map` 샘플(bpftool), BUDGET_EXCEED 수(에피소드당 1회), Replenisher 로그와 `remaining_us` 복원 시각 |
+| 03 (CBS 예산 집행, BUDGET_EXCEED) | 결정적 차감 경계: 정확히 소진 후 수면, 소진 후 단독 runnable, 보충 불가 깨움, 보충 가능 깨움(`tol` 경계 포함). Linux 타깃에서 단독 runnable과 상위 클래스 선점 후 복귀, `SCX_ENQ_LAST` 적용 시 TT·BE 회귀, `evttask --overrun-us`로 승격 검증 | 큐·`sched_switch` 기록에서 보충 전 재실행 없음, 실제 진입당 에피소드 계수와 발행 1회, 수면·적격 깨움에서 불필요한 스로틀 없음. 초과 실행과 승격 지연은 TIM-004/TIM-003으로 별도 판정 |
 | 04 (마감 감지와 스로틀, 한 번만) | (a) `evttask --overrun-us`로 D 초과, FCW `--overrun-ms 10`. (b) 실행 시간은 D 미만이지만 뒤에서 기다리는 경우: `evttask --burst N` 또는 D보다 긴 TT 블록과 겹치게 도달 | Job마다 마감 실패 1회(중복 0). (승인 후) (b)에서 `NOT_STARTED`, `THROTTLED` 플래그. 미스 기록의 `t_detect − t_dl` ≤ TIM-009 후보. O 수신 로그 ≤ TIM-010 후보(보내진 보고만) |
 | 05 (외부 생성기, 전달 지연) | `evttask --source udp` 외부 생성기(타 노드 또는 CPU) | L_wake = `t_start − t_act`를 Gap 상태(TIM-001)와 TT 점유 상태(TIM-002)로 나누어 p99.99 집계. L_post = `t_act − t_arr`(TIM-011). L_del = `t_start − t_arr`(TMG-016, Job 로그 `t_arr`와 실행 구간 `t_start`). L_post는 게시 스레드를 기준 생산자 구성(A-10)에 두고 재며 TIM-011 상한으로 판정한다. 워커가 대기 중일 때 도달한 Event만 센다. |
 | 06 (격리 CPU 집합) | 1 h 정격 + 폭주 | `perf sched` 또는 `sched_switch` 트레이스에서 `cbs_task`의 CPU 집합이 배정 CPU 하나뿐이다 |

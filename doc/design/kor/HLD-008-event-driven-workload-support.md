@@ -188,10 +188,10 @@ BPF는 예산과 실행 구간을 다룬다. 코드 식별자에는 `job_` 접�
 | DSQ | 유지 | `DSQ_CBS_BASE + cpu`, `DSQ_THROTTLED_BASE + cpu`(Isolated CPU마다 `init`에서 생성) | D-06 |
 | `ops.runnable` | 수정 | WAITING→ACTIVE, $t_{act}$ 기록, `run_seq` 증가. 윈도우 검사: 직전 윈도우가 끝났으면(규칙 1) 예산을 채우고 새 윈도우 시작, 끝나지 않았으면 남은 예산으로 실행하고 `CARRYOVER` 표시. 활성화 기준 MIT 검사와 `MIT_VIOLATION` 발행은 삭제 | D-02, D-04 |
 | `ops.select_cpu` | 수정 | 활성화 기록 제거. `assigned_cpu` 반환 | D-02, D-06 |
-| `ops.enqueue` | 수정 | L2 → 배정 CPU의 L2 DSQ(순위 = `queue_key_ns`) 또는 THROTTLED DSQ(순위 = `replenish_at`). 여기서는 예산을 채우지 않는다 | D-04, D-06, D-08 |
+| `ops.enqueue` | 수정 | 활성화 보충 적용 뒤의 잔여 예산으로 배정 CPU의 L2 DSQ 또는 THROTTLED DSQ를 선택한다. 실제 THROTTLED 진입에서만 에피소드 계수와 `BUDGET_EXCEED` 발행을 수행한다. 여기서는 보충하지 않는다 | D-04, D-06, D-08, D-10 |
 | `ops.dispatch` | 수정 | 자기 CPU의 THROTTLED 중 윈도우가 끝난 서버를 승격(예산 채움, 새 윈도우, 순위 = 승격 시각) → L2 DSQ를 활성화 순서로 소비. TT-first 유지. TT 슬롯이 없는 CPU에서는 TT 활성 판정이 거짓이라 TT 게이트에 막히지 않는다(FR-B-025, D-22) | D-04, D-06, D-08 |
 | `ops.running` | 수정 | 최초 실행 시 `t_start` 기록. 슬라이스 캡 유지 | D-02 |
-| `ops.stopping` | 수정 | 예산 차감(ns 누산). `BUDGET_EXCEED`는 양수→0 전이에서만 1회. **조기 DMISS 판정 삭제** | D-04, D-10 |
+| `ops.stopping` | 수정 | 예산 차감(ns 누산). 계속 runnable이면서 잔여 0이면 남은 슬라이스를 재사용하지 않도록 한다. 단독 runnable 태스크의 만료 후 재실행도 막는 enqueue 경로가 필요하다(LLD-008 §4.4). 수면은 차감만 한다. **조기 DMISS 판정 삭제** | D-04, D-10 |
 | `ops.quiescent` | 수정 | ACTIVE→WAITING(자발적 수면 = 실행 구간 종료). `t_sleep`, `budget_used_us` 기록, 실행 구간 레코드 발행(`trace_enabled`일 때). **DMISS 판정 삭제** | D-02, D-16 |
 | `ops.exit_task` | 신규 | 태스크 종료 레코드(`bind_gen` 포함)를 `job_trace_rb`로 발행(게이트 없음) → JobTraceCollector → TaskRegistry | D-12, D-16 |
 | `job_trace_rb` | 수정 | 실행 구간 레코드(256 KiB, `trace_enabled` 게이트). 태스크 종료 레코드는 게이트와 무관하게 발행 | D-16 |
@@ -271,7 +271,7 @@ $L_{del}^{max}$의 두 부분은 모두 **측정 목표**이며 증명된 최악
 3. source의 도달은 MIT를 지킨다.
 4. Job은 블로킹하지 않는다(§8.1 6항). A-06은 이 식의 적용 조건이며 정확성 전제는 아니다. 블로킹하는 source는 마감을 감시하지만 수용식이 보장하지 않는다.
 5. 어댑터는 도달 시점에 게시한다. 준 $t_{arr}$이 현재보다 이르면 그만큼 $D$가 소비된다.
-6. 각 Job의 CPU 수요가 선언한 $C_i$를 넘지 않는다(여유 있게 선언한다).
+6. 활성화부터 실제 수면까지의 차감 실행 시간(대기 진입 비용 포함)은 선언한 $C_i$ 이하이다(예산 여유 권고).
 7. 각 Job은 다음 도달 전에 워커가 `ttsched_evt_wait()`에서 잠들 만큼 빨리 끝난다(§4.3의 P-a 경계 사례).
 8. `tol`(§4.3)이 측정된 활성화 지터를 덮는다.
 
@@ -377,7 +377,7 @@ sequenceDiagram
 
 보충 윈도우의 시작은 커널 활성화(runnable 전환)에 묶여 있으며 첫 실행 시각에 묶이지 않는다. 승격과 보충은 BPF가 배정 CPU에서 수행하고 Replenisher는 dispatch를 유발할 뿐이다(D-04 규칙 6, D-07). 실행 구간이 새로 시작해도 예산을 새로 주지 않는다. 같은 윈도우 안에서 시작한 Job(연속 Job이나 블로킹 뒤 재개)은 남은 예산을 나눠 쓴다(D-04). 열린 윈도우 안에서 예산은 늘어나지 않는다. 서버는 다음 커널 활성화(규칙 1)나 승격(규칙 3)에서만 정상 상태로 돌아간다.
 
-**윈도우 조건 P-a(재기술).** Event 도달이 MIT를 지키고, 각 Job의 차감 실행 시간이 $C_s$ 미만이며, Job이 블로킹하지 않으면 다음이 성립한다.
+**윈도우 조건 P-a(재기술).** Event 도달이 MIT를 지키고, 활성화부터 실제 수면까지의 차감 실행 시간이 $C_s$ 이하이며, Job이 블로킹하지 않으면 다음이 성립한다.
 
 - $T_s \le MIT$($T_s$는 선언된 CBS 주기 `period`, MIT는 `min_inter_arrival_us`이며 없으면 주기다). 이 조건이 없으면 $T_s > MIT$인 서버에서 적합한 도달이 열린 윈도우 안에 떨어져 새 예산을 받지 못한다.
 - $D \le MIT$.
@@ -847,7 +847,7 @@ for (;;) {
 | 4. post 직렬화 | source당 post 컨텍스트는 하나다. 입력 스레드가 여럿이면 post 호출만 직렬화한다(잠금은 포스터 쪽). 생산자 스레드는 기준 생산자 구성 (REQ-008 A-10)을 따른다. 대상 구성에서 $L_{post}$를 측정해 TIM-011 상한 이내인지 확인한다. | 입력 스레드 수와 직렬화 방법 |
 | 5. 워커 루프와 폐기 정책 | wait → process → done 루프를 쓴다. 처리 중 블로킹(잠금 경합, 로그 출력, sleep)을 없앤다. DISCARDED로 끝낼 조건을 정한다 | 수정된 워커 루프 |
 | 6. 파라미터와 수용 판정 | MIT, C, D, T를 정하고 $0 < C \le D \le MIT$, $T \le MIT$를 확인한다. §3.6의 수용식으로 판정한다. 거부되면 D를 MIT 안에서 늘리거나, CPU의 다른 L2 태스크를 줄이거나, 다른 CPU로 옮기거나, C를 측정값에 맞춰 낮춘다(측정 최댓값보다 작게 선언하지 않는다) | `SchedInfo` 항목, 수용 판정 결과 |
-| 7. 검증 | **정상 구동**: 폴트 0건(MIT_VIOLATION이 나오면 위 파라미터 기준의 MIT가 낙관적이다). Job 기록 수(워커가 끝낸 기록과 TIMPANI가 닫은 기록의 합) = `accepted`(포스터가 죽지 않은 구간), 정지 상태에서 `accepted = started + cancelled-before-start + queued`, 워커가 끝낸 모든 Job 기록에서 $t_{end} - t_{arr} \le D$이고 `missed` 없음, `budget_used_us`(제안 필드, 구현 전에는 쓸 수 없음)의 최댓값이 C보다 작음, `overflow` 0. **이상 주입**: 실행 시간 초과 → BUDGET_EXCEED와 스로틀, 짧은 간격 도달 → MIT_VIOLATION. 두 경우 모두 L1 TT 지터와 다른 L2 태스크가 영향을 받지 않음을 본다 | 검증 기록(AC-008-01~07, 13~16 대응) |
+| 7. 검증 | **정상 구동**: 폴트 0건(MIT_VIOLATION이 나오면 위 파라미터 기준의 MIT가 낙관적이다). Job 기록 수(워커가 끝낸 기록과 TIMPANI가 닫은 기록의 합) = `accepted`(포스터가 죽지 않은 구간), 정지 상태에서 `accepted = started + cancelled-before-start + queued`, 워커가 끝낸 모든 Job 기록에서 $t_{end} - t_{arr} \le D$이고 `missed` 없음, `budget_used_us`(제안 필드, 구현 전에는 쓸 수 없음)의 최댓값이 C 이하이고 워커가 다음 도달 전에 실제로 수면, `overflow` 0. **이상 주입**: 실행 시간 초과 → BUDGET_EXCEED와 스로틀, 짧은 간격 도달 → MIT_VIOLATION. 두 경우 모두 L1 TT 지터와 다른 L2 태스크가 영향을 받지 않음을 본다 | 검증 기록(AC-008-01~07, 13~16 대응) |
 
 **파라미터를 정하는 기준.**
 
@@ -871,7 +871,7 @@ C에 들어가는 것과 들어가지 않는 것은 BPF의 예산 차감 기준�
 | ② 입력 커버리지 | 입력 의존 워크로드에서 기록한 실제 입력의 재생, 경계값·최악 입력(예: 판단 분기별 입력), 폐기 경로를 타는 비정상 입력. 재생과 입력 내용 통제는 `evttask`(§8.5)나 응용 전용 자극 도구가 필요하다(구현할 도구 작업). FCW 예제는 정상 경로가 입력과 무관한 고정 반복이므로 `--overrun-ms`와 `-be`를 끈 상태로 잰다 | 입력 종류별 `budget_used_us` 최댓값 |
 | ③ 환경 스트레스 | 긴 유휴 뒤 첫 Job(캐시·TLB가 식은 상태), 연속 도달(버스트), 다른 코어의 메모리·캐시 부하(예: `stress-ng`), 같은 CPU의 TT·다른 L2 동시 실행. 도달 간격을 무작위로 섞는다 | 조건별 최댓값 |
 | ④ 선언 | ①~③의 최댓값에 여유를 더해 `runtime`으로 선언한다. 퍼센타일 기준은 정상 구동에서도 BUDGET_EXCEED를 만들 수 있으므로 쓰지 않는다 | `runtime` |
-| ⑤ 검증 | 7단계의 정상 구동(`budget_used_us` 최댓값 < C, BUDGET_EXCEED 0건)과 이상 주입(`-be`, `--overrun-ms`) | 검증 기록 |
+| ⑤ 검증 | 7단계의 정상 구동(`budget_used_us` 최댓값 ≤ C, 실제 수면 확인, BUDGET_EXCEED 0건)과 이상 주입(`-be`, `--overrun-ms`) | 검증 기록 |
 | ⑥ 운용 관측 | 배포 뒤에도 실행 구간의 `budget_used_us`와 BUDGET_EXCEED를 추적한다. 예산 초과는 C 설정·도달 간격·연속 Job·보충 상태를 재검토할 신호이지 C 과소 추정만의 증거가 아니다. 처음에는 C를 여유 있게 두고(명시적 Event 연결이 없어도 CBS 예산 관리로 CPU 간섭을 제한하며) 운용 데이터를 모은 뒤 C를 확정할 수 있다. C를 바꾸면 수용 판정을 다시 받는다 | 운용 통계 |
 
 - **주의:** `budget_used_us`는 Job이 아니라 **실행 구간 단위**다. 대기 Event가 있어 한 실행 구간에서 Job 여러 개를 연속 처리하면 합산된다. Job 안에서 잠들면 반대로 한 Job이 여러 실행 구간으로 나뉜다. 따라서 ①에서는 실제로 한 Job과 한 실행 구간이 대응했는지 확인한다. ③의 버스트 등 대응이 깨지는 조건에서는 실행 구간 최댓값을 Job당 C로 직접 쓰지 않고 Job과 구간을 연계하거나 별도 CPU 시간 계측으로 보완한다. Job 로그의 $t_{end} - t_{begin}$은 벽시계 시간이므로 C 측정에 쓰지 않는다.
@@ -959,7 +959,7 @@ FCW 예제는 §8.3의 "미들웨어 메시지 콜백" 행이다. 아래는 §8.
 | 실행 | 기대 | 수용 기준 |
 |:--|:--|:--|
 | 옵션 없음(정상) | MIT를 측정으로 확정한 뒤 폴트 0건이다(시작값 18 ms에서 MIT_VIOLATION이 나오면 MIT가 낙관적이므로 (§8.2의 MIT 산정 기준대로 줄인다). Job 기록 수 = 경보 수. 각 Job은 wait 한 번과 done 한 번이다. 모든 Job에서 $t_{end} - t_{arr} \le 5$ ms이고 `missed` 없음. 정지 뒤 `accepted = completed`, `overflow` 0. `budget_used_us`는 C보다 작다. `tt_task`의 지터는 L2 없이 돌렸을 때와 같다 | AC-008-01, 02, 05, 13 |
-| `fcw_consumer -be [N]`(N번째 Event의 Job이 3 ms 사용, 예산 2 ms, 윈도우 18 ms) | 그 Job에서 BUDGET_EXCEED 1회. 0~2 ms에 예산을 다 쓰고 스로틀된다. 18 ms 승격 때 새 예산 2 ms로 나머지 1 ms를 쓰고 19 ms에 완료된다. 5 ms에 DeadlineMonitor가 **완료 전에** 마감 경과를 감지해 DMISS(THROTTLED)를 낸다. 완료 기록은 $t_{end}$ = 19 ms이고 `missed`는 한 번만 센다. 다음 Event(20 ms 도달)는 열린 윈도우 [18, 36)의 남은 1 ms를 CARRYOVER로 쓴다. 그 Job의 CPU 사용량 c가 1 ms보다 크면 36 ms까지 스로틀되어 마감을 또 놓친다(THROTTLED, CARRYOVER). c가 1 ms보다 작으면 마감을 지키고, 36 ms 이후의 Job부터 새 예산으로 정상이다. c는 정상 구동의 `budget_used_us`로 확인한다. `tt_task`는 영향 없음 | AC-008-03, 14 |
+| `fcw_consumer -be [N]`(N번째 Event의 Job이 3 ms 사용, 예산 2 ms, 윈도우 18 ms) | 그 Job에서 BUDGET_EXCEED 1회. 0~2 ms에 예산을 다 쓰고 스로틀된다. 18 ms 승격 때 새 예산 2 ms로 나머지 1 ms를 쓰고 19 ms에 완료된다. 5 ms에 DeadlineMonitor가 **완료 전에** 마감 경과를 감지해 DMISS(THROTTLED)를 낸다. 완료 기록은 $t_{end}$ = 19 ms이고 `missed`는 한 번만 센다. 다음 Event(20 ms 도달)는 열린 윈도우 [18, 36)의 남은 1 ms를 CARRYOVER로 쓴다. 다음 실제 수면까지의 차감 수요 c가 1 ms를 넘으면 추가 실행 전에 스로틀되어 36 ms까지 기다리므로 예시 마감을 놓친다(THROTTLED, CARRYOVER). c가 1 ms 이하이고 소진 시 워커가 잠들면 이월 예산 때문에 스로틀되지 않는다. 마감 충족은 별도로 판정한다. c는 정상 구동의 `budget_used_us`로 확인한다. `tt_task`는 영향 없음 | AC-008-03, 14 |
 | `fcw_consumer --overrun-ms 10`(모든 Job이 10 ms 사용) | 모든 Job이 예산을 넘는다. 스로틀 에피소드마다 BUDGET_EXCEED, Job마다 DMISS이며 감지는 큐 대기 중(NOT_STARTED) 또는 실행·스로틀 중(THROTTLED)이다. 서버는 18 ms마다 2 ms만 쓰므로 Job 하나에 여러 윈도우가 필요하고, 도달(20 ms)은 그보다 빨리 쌓인다. 공통 큐가 QDEPTH(후보 8)에 차면 E_FULL이 나고 앱이 버린다(`overflow`와 앱 통계). 수락된 Event는 처리되거나 마감 실패로 기록되며 조용히 사라지지 않는다. `tt_task`는 영향 없음 | AC-008-04, 15 |
 | `mock_radar_producer --burst-ms 6`(도달 간격 6 ms, MIT 18 ms) | 간격이 MIT보다 짧은 도달마다 `mit_viol`이 오르고, FaultMonitor가 $T_s$ 윈도우마다 MIT_VIOLATION을 개수와 함께 낸다. 서버는 18 ms마다 2 ms만 쓰므로 Job이 밀리고, 그 DMISS에는 MIT_RELATED가 붙는다. 버스트가 끝나면 큐가 비고 수락 관계식이 성립한다. 이 모드는 TIMPANI의 TT 깨움 대신 로컬 타이머를 쓰므로 L1 보호를 보는 시험이 아니다. MIT 경로만 본다 | AC-008-07 |
 | `fcw_consumer --wakeup-delay-ms 5`(수신 스레드가 post 전 5 ms 지연, D 5 ms) | 지연이 $t_{arr}$부터 마감을 소진한다. post는 $t_{arr} + 5$ ms, 즉 마감과 같은 시각에 일어난다. 워커가 바로 가져가면 늦은 완료로 기록되고(LATE_COMPLETION), 더 기다리면 큐 대기 중에 NOT_STARTED로 먼저 감지된다. 이 실험은 도달부터 세는 마감을 보이는 것이며 TIMPANI의 활성화 기준이 아니다 | AC-008-01, 14 |
