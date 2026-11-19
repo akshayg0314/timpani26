@@ -6,8 +6,8 @@ SPDX-License-Identifier: MIT
 # DDR-009: Data-Driven Workload — Phase 0 설계 결정 기록
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-01  
-**상태:** Draft — Phase 0 설계 제안, Project Leader 검토 대상  
+**최종 수정:** 2026-11-20  
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님)  
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §9, [SRS-009](SRS-009-data-driven-workload.md)  
 **연계 설계:** [HLD-009](HLD-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -93,7 +93,7 @@ flowchart LR
 - **이유**: ready와 실제 실행 허가를 분리하면 L1의 조기 wake를 막으면서 L2의 기존 CBS admission·budget·Gap 경로를 그대로 재사용할 수 있다. Timer Master가 TT slot을 소유하고 BPF가 runnable Task의 CBS 집행을 소유하므로 책임 중복이 없다.
 - **비채택**: `predecessors` 유무로 Task class를 추론하는 방식, 모든 Successor를 CBS/TT 중 하나로 강제하는 방식, L1 Successor를 기존 `tasks[i].counter`로 조기 wake하는 방식, L2 Successor에 별도 Data-Driven DSQ를 만드는 방식.
 - **Phase 0 시험 전제**: 정상 시험은 L1 Successor의 `ALL` ready가 해당 TT slot 전에 1회 충족되는 경우다. slot에 ready가 없으면 wake `0`; slot 후 도착한 ready는 다음 TT slot까지 pending으로 유지한다. pending이 2개 이상인 backlog는 Phase 0 정상 수용 조건이 아니다. cross-workload 참조, `Activation Window`, slot miss 만료, `SKIP`은 Phase 1/2로 이관한다.
-- **추적**: REQ-DD-001~009, 013; OI-DD-01, OI-DD-03, OI-DD-05.
+- **추적**: `REQ-DD-P0-F-001`..`F-004`, `F-007`, `N-003` (상위 `REQ-DD-001`..`009`, `013`); `OI-DD-01`, `OI-DD-03` *(Phase 1 이관: `OI-DD-05`)*.
 
 ---
 
@@ -116,7 +116,7 @@ flowchart LR
 - **CBS 보강 가능성**: 기존 CBS worst-fit 정책으로 저부하 CPU를 선택할 수 있으나 이는 CBS 배치 정책이며 모든 Successor에 적용하는 Data-Driven 규칙은 아니다.
 - **Phase 1**: 혼합 DAG의 E2E 분석에 계층별 slot/Window/Gap, TT 선점, CBS 간섭을 포함한다.
 - **Phase 2**: 실행 중 자동 마이그레이션은 하지 않는다. CPU/slot 변경은 O의 새 테이블 적용에서만 수행한다.
-- **추적**: `REQ-DD-008`, `REQ-DD-009`, `AC-DD-P0-05`, `AC-DD-01`; `OI-DD-03`, `OI-DD-05`.
+- **추적**: `REQ-DD-P0-F-002`, `F-007`, `N-003` (상위 `REQ-DD-008`, `REQ-DD-009`), `AC-DD-P0-05`; `OI-DD-03` *(Phase 1 이관: `AC-DD-01`, `OI-DD-05`)*.
 
 ---
 

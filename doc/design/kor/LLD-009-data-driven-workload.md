@@ -6,10 +6,10 @@ SPDX-License-Identifier: MIT
 # LLD-009: Data-Driven Workload — Phase 0 상세 설계
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-01  
-**상태:** Draft — 내부 처리 및 인터페이스 제안 계약 (구현 완료 아님)  
+**최종 수정:** 2026-11-20  
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님)  
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §6, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md)  
-**설계 결정:** [DDR-009](DDR-009-data-driven-workload.md) `D-DD-P0-01`..`04`, [DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`, `D-P0-06`
+**설계 결정:** [DDR-009](DDR-009-data-driven-workload.md) `D-DD-P0-01`..`05`, [DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`, `D-P0-06`
 
 ---
 
@@ -19,8 +19,8 @@ SPDX-License-Identifier: MIT
 
 | 기존 접점 | Phase 0 상세 설계 의도 | 승인·호환 제약 |
 |:---|:---|:---|
-| `timpani-o/proto/*.proto` | optional Task class override, 구조화 `TaskReference`, workload/task hash 쌍 공통 DAG metadata | **`OI-DD-01` 승인** |
-| `sample-apps/src/libttsched.h/c` | versioned Pipeline extension, packed `ready_state`, dispatch-only futex, `wait_data`/`signal_ready` 및 ABI/`errno` 계약 | **`OI-DD-02` 승인** |
+| `timpani-o/proto/*.proto` | optional Task class override, 구조화 `TaskReference`, workload/task hash 쌍 공통 DAG metadata | **`OI-DD-01` 인터페이스 승인** |
+| `sample-apps/src/libttsched.h/c` | versioned Pipeline extension, packed `ready_state`, dispatch-only futex, `wait_data`/`signal_ready` 및 ABI/`errno` 계약 | **`OI-DD-02` 조건부 승인** |
 | `timpani-o/src/global_scheduler.*` | Task class를 explicit-over-inherit로 해석하고 DAG 검증 후 TT/CBS 배치와 graph meta를 분리 생성 | 기존 API 보존 |
 | `timpani-n/src/main.cpp` | TT/CBS entry와 공통 graph meta를 함께 로컬 확인·등록 | 계층별 가능성 재계산 없음 |
 | `timpani-n/src/timer_master.*` | L1 Task는 allowed slot에서 pending ready를 dispatch | L2 release는 하지 않음 |
@@ -128,7 +128,7 @@ live SHM object는 수명 동안 고정 크기다. `Timpani-N`은 full-layout ma
 - 실패한 Pipeline 호출은 RT 경로에서 silently remap/reopen하지 않는다. caller는 정상 control path에서 `ttsched_init()`을 다시 호출하며, 재초기화는 구 region을 unmap하고 보유 fd를 닫은 뒤 현재 full-size object를 open/map한다. 재초기화 전 반복 호출은 안전하게 `ESTALE`을 반환한다.
 - write가 필요한 Data-Driven Source는 `O_RDWR` + `PROT_READ|PROT_WRITE`로 열리고, 권한이 없으면 `g_shm_writable = 0`으로 기존 읽기 전용 TT 경로에 fallback한다. read-only Successor는 `O_RDONLY`로 `ttsched_wait_data()`를 사용할 수 있지만 `ttsched_signal_ready()`는 `EACCES`를 반환한다.
 - `Timpani-N`만 object lifecycle 연산을 소유한다. workload client는 승인 API로 mapped field를 갱신할 수 있지만 `ftruncate()`, `shm_unlink()`, resize를 호출해서는 안 된다. 일반 TT/Successor는 최소 O_RDONLY, Data-Driven 완료 신호를 보내는 Task는 O_RDWR 권한을 받아야 한다. Phase 0 구현은 permission·group/UID/GID 배포 정책을 명시하고, 승인되지 않은 전체-world-write를 생산 배포의 정당한 ABI 계약으로 간주하지 않는다. 현재 PoC의 `0666`은 regression 시험 범위로만 유지하거나 동등한 배포 ACL로 대체한다.
-- 공개 API 시그니처 *(사전 승인 대상, `OI-DD-02`)*:
+- 공개 API 시그니처 *(조건부 승인, `OI-DD-02`)*:
   ```c
   int ttsched_wait_next_period(void);              /* 기존 TT API, 변경 없음 */
   int ttsched_wait_data(uint32_t *job_token);       /* 실제 dispatch wake만 0 */
@@ -484,7 +484,7 @@ int ttsched_signal_ready(uint32_t job_token)
         syscall(SYS_futex, (uint32_t*)&dst->dispatch_counter,
                 FUTEX_WAKE, 1, NULL, NULL, 0);
     }
-    /* TT target: TimerMaster가 허용 slot에서 dispatch_counter를 연다. */
+    /* TT target: Timer Master가 허용 slot에서 dispatch_counter를 연다. */
     result = 0;
 
 out:
@@ -567,7 +567,7 @@ out:
    ```
 
    이 전체 테이블 검사는 N 게시 사전조건이다. RT `signal_ready()`의 Source-local plan만으로는 global bijection을 증명할 수 없으므로 게시 generation 수명 동안 검증된 불변 metadata를 사용한다.
-4. TT Task는 기존 `TtSlot`/TimerMaster에, CBS Task는 기존 `CbsConfig`/CbsState에 등록한다.
+4. TT Task는 기존 `TtSlot`/Timer Master에, CBS Task는 기존 `CbsConfig`/CbsState에 등록한다.
 5. 실제 게시 직전 `pipeline_header.publication_guard`에 writer-pending 비트를 설정해 새 Pipeline commit 진입을 차단한다. 이미 시작된 활성 commit은 게시의 상태 기록보다 먼저 끝나야 하며, publisher는 active count가 `0`이 될 때까지 제한된 시간 `FUTEX_WAIT` 또는 bounded yield로 대기한다. 마지막 reader는 guard를 해제할 때 writer-pending을 감지하면 guard futex wake를 수행한다.
 6. active count가 `0`이 된 뒤 `magic=0`, 홀수 `generation`, `tasks[]`/`pipeline_header`/`pipeline[]` 갱신, `pipeline_header.magic/version/abi_size` 유효화, 짝수 `generation`, `magic=유효`, writer-pending 해제 순서로 게시한다.
 7. 게시 자체는 ready나 dispatch 순번을 증가시키지 않는다. active count가 기한 안에 `0`이 되지 않으면 해당 경계 적용을 거절하거나 다음 경계로 이연한다. 게시/종료 control wake는 `dispatch_counter`를 바꾸지 않는다. object-capable 갱신은 구 inode를 full size로 유지하며 교체는 무효화 + drain + `unlink`만 사용하고 inplace shrink는 사용하지 않는다.
@@ -618,9 +618,9 @@ Phase 0 L1 slot에 ready가 늦게 도착하면 해당 slot에서는 wake하지 
 
 ---
 
-## 6. Protobuf 인터페이스 최소 확장안 (`OI-DD-01`, 사전 승인 대상)
+## 6. Protobuf 인터페이스 최소 확장안 (`OI-DD-01`, 인터페이스 승인)
 
-> **주의**: 실제 `.proto` 파일 반영은 Project Leader의 명시적 승인 후에만 수행한다(`CON-DD-05`).
+> **주의**: 실제 `.proto` 파일 반영은 `OI-DD-01` 승인 범위와 구현 병합 게이트를 준수해 수행한다(`CON-DD-05`).
 
 ```protobuf
 // timpani-o/proto/schedinfo.proto (package schedinfo.v1)

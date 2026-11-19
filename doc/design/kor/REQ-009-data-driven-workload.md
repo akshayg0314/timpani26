@@ -6,13 +6,13 @@ SPDX-License-Identifier: MIT
 # REQ-009: Data-Driven Workload 지원 — 요구사항 정의서
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-10-31 (Phase 0/1/2 단계 기준 분리, Phase 0 시험 경계·최소 동작·수용 기준·후속 문서 기준 명시 및 DDR-011 Phase 0 정합 반영)  
-**상태:** Draft  
+**최종 수정:** 2026-11-20 (Phase 0 문서군 내부 정합성 정비: §1.5.3 `REQ-DD-009` 보완, 목록·용어·후속 문서 상태 정리)  
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님)  
 **현재 설계 기준:** Phase 0 — Data-Driven Workload 기본 체인 동작 확인  
 **작성자:** Human + AI  
 **상위 요구사항:** [SRS-000](SRS-000-timpani-system.md) §5.1 `REQ-DD-001`  
 **관련 문서:** [DDR-001](DDR-001-workload-model.md)(워크로드 모델), [DDR-002](DDR-002-scheduling-architecture.md)(스케줄링 아키텍처), [DDR-003](DDR-003-interface-protocol.md)(인터페이스/프로토콜), [DDR-004](DDR-004-resource-allocation.md)(자원 할당), [DDR-005](DDR-005-sched-ext-bpf-scheduler.md)(BPF 스케줄러), [DDR-006](DDR-006-communication-architecture.md)(통신), [DDR-007](DDR-007-tt-cbs-integrated-scheduling.md)(TT/CBS), [REQ-011](REQ-011-runtime-table-update.md)·[DDR-011](DDR-011-runtime-table-update.md)(런타임 테이블 갱신), [DDR-012](DDR-012-fault-management.md)(장애 관리)  
-**후속 문서:** [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md), [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), PLAN-009. 현재 개정 대상 문서는 모두 **Phase 0 기준**으로 작성하며, 전체 단계(Phase 1/2)의 기능을 현재 구현 범위로 자동 승계하지 않는다(§8.2).
+**후속 문서:** [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md), [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), `PLAN-009`(작성 예정). 현재 개정 대상 문서는 모두 **Phase 0 기준**으로 작성하며, 전체 단계(Phase 1/2)의 기능을 현재 구현 범위로 자동 승계하지 않는다(§8.2).
 
 > **문서의 역할.** 본 문서는 **요구사항 정의서(What & Why)** 이다. 선행 태스크의 데이터 준비 완료(`Data-Ready`)에 의해 후행 태스크가 실행될 때 TIMPANI가 *무엇을* 보장해야 하고 *왜* 그래야 하는지를 시스템 수준에서 규정한다. 세부 프로토콜 필드, 공유 메모리(SHM) 비트 레이아웃, 위상 정렬 알고리즘은 본 문서에서 고정하지 않으며, 이는 [SRS-009](SRS-009-data-driven-workload.md)에서 명세하고 [DDR-009](DDR-009-data-driven-workload.md)·[LLD-009](LLD-009-data-driven-workload.md)에서 결정·상세화한다.
 >
@@ -93,10 +93,10 @@ flowchart LR
 - O는 Task의 원래 실행 계층을 유지한 채 DAG 준비 조건을 공통 메타데이터로 생성하고, N은 TT/CBS별 기존 발화·dispatch 경로에 연결
 - 다중 선행 입력 `ALL` 동기화와 `libttsched` Data-Ready API
 - 계층별 TT 슬롯/Window 또는 CBS 예산/Gap 검증, FFI 및 `E2E deadline` `Feasibility` 검사
-
-`Source`/`Successor`는 DAG 역할일 뿐 L1/L2를 결정하지 않는다. Source도 L2 외부 Event로 활성화될 수 있고, Successor도 L1 TT 또는 L2 CBS로 실행될 수 있다.
 - 입력 누락 타임아웃 시 `SKIP` 격리, Sink Fallback 유지 및 원인 선행 태스크 `DATA_TIMEOUT` 보고 *(Phase 2)*
 - [REQ-011](REQ-011-runtime-table-update.md) 런타임 테이블 갱신과의 공유 인터페이스 호환성*(Phase 0)*, 정상 경계 전환 정합성*(Phase 1)*, 비정상/복구 상태 초기화*(Phase 2)*
+
+`Source`/`Successor`는 DAG 역할일 뿐 L1/L2를 결정하지 않는다. Source도 L2 외부 Event로 활성화될 수 있고, Successor도 L1 TT 또는 L2 CBS로 실행될 수 있다.
 
 ### 1.4 범위에서 제외되는 것
 
@@ -136,7 +136,7 @@ Data-Driven Workload는 [REQ-011](REQ-011-runtime-table-update.md)과 동일한 
     3. 테이블 게시 알림, 종료 알림, 슬롯 재사용 등 `dispatch_counter` 증가가 없는 **제어 wake**는 후행 태스크 실행으로 소비하지 않는다. Pipeline API는 publish/write-permission/ABI 실패를 `errno`로 구분해 변경 없이 실패해야 한다.
     4. Pipeline을 포함하지 않는 일반 L1 TT 테이블에 대해서는 [REQ-011](REQ-011-runtime-table-update.md) Phase 0 정상 갱신 수용 기준(`AC-P0-01` ~ `08`)에 회귀가 없어야 한다.
   - **단계 경계:** Phase 0은 최초 게시·무효화와 고정 Pipeline commit 직렬화를 요구하지만 Pipeline을 포함한 정상 런타임 갱신은 수행하지 않는다. Phase 1은 같은 guard를 Pipeline 경계 갱신에 적용하고, Phase 2는 갱신 실패·rollback·재시작에서 남은 guard/상태 회수를 추가한다.
-- **입력 및 역할 분담:** O는 DAG와 Task의 기존 L1/L2 배치를 각각 검증한다. N은 공통 SHM 그래프만 게시하고, TT Task는 TimerMaster/TT gate, CBS Task는 CBS gate를 사용한다. `Data-Ready` 자체는 실행 계층을 재분류하거나 CPU를 바꾸지 않는다.
+- **입력 및 역할 분담:** O는 DAG와 Task의 기존 L1/L2 배치를 각각 검증한다. N은 공통 SHM 그래프만 게시하고, TT Task는 Timer Master/TT gate, CBS Task는 CBS gate를 사용한다. `Data-Ready` 자체는 실행 계층을 재분류하거나 CPU를 바꾸지 않는다.
 - **보장 수준:** 부분 선행·제어 wake 시 미실행과 L1/L2 계층별 dispatch 조건을 확인한다. 타임아웃 `SKIP`, `DATA_TIMEOUT`, 정량적 최악 `E2E`는 후속 단계 대상이다.
 
 #### 1.5.3 Phase 0에서 요구하는 최소 동작
@@ -151,10 +151,11 @@ Data-Driven Workload는 [REQ-011](REQ-011-runtime-table-update.md)과 동일한 
 | **REQ-DD-005** | 직속 선행 전원이 Successor의 활성 `ready_sequence`와 같은 `job_token`을 제시한 경우에만 주기당 계층별 dispatch를 1회 허용한다. Source의 전체 outgoing-edge set을 첫 destination 변경 전에 검증·preflight하며, 잘못된 metadata 또는 어느 destination의 중복/낡은 token 실패도 전체 fan-out의 mask·sequence·dispatch·wake를 불변으로 둔다. 성공 `ALL` CAS를 모두 끝낸 뒤 CBS wake를 발생시킨다 | 범용 idempotency, `ANY`, Harmonic 다중 주기 매핑: Phase 1 |
 | **REQ-DD-007** | RT critical path에서 블로킹 IPC/gRPC·동적 할당·커널 특권 없이 SHM 원자 연산 + `futex`로 `Data-Ready` 전달 | 멀티코어 동시 경합 정량 검증: Phase 1 |
 | **REQ-DD-008** | L1 Successor는 ready + 자신의 TT slot gate, L2 Successor는 ready + 기존 CBS CPU/budget/Gap gate를 만족한다. Phase 0에서는 계층별 `dispatch_counter` gate만 집행한다 | `Activation Window`와 Gap 정밀화: Phase 1 |
+| **REQ-DD-009** | O는 각 Task의 resolved 실행 계층에 기존 TT slot 배치 또는 CBS admission/worst-fit 정책을 적용하고 DAG 위상 순서를 tie-breaker로만 사용한다. 런타임 CPU 마이그레이션은 허용하지 않는다 | TT Window 및 CBS Gap/간섭을 포함한 혼합 DAG `E2E` 분석: Phase 1 |
 | **REQ-DD-015** | 011 안정 게시와 extension `magic/version/abi_size`, Task 신원, commit guard를 확인한다. packed `ready_state` 단일 64비트 CAS와 `dispatch_counter` 갱신/wake를 게시자와 같은 세대 순서로 직렬화하고, 구 ABI·무효 snapshot·writer-pending 상태에서는 변경 없이 실패한다 | Pipeline 정상 갱신 경계 적용: Phase 1, 실패/재시작의 guard 회수: Phase 2 |
 | **REQ-DD-013** | 고정 기본 체인에서 TT→TT, TT→CBS, CBS→TT, CBS→CBS 연결과 부분 입력/제어 wake, 무효 DAG, 기존 TT/CBS 회귀 및 세대-commit 경쟁을 검증 | 혼합 계층 `E2E`·정상 갱신: Phase 1, Fail-Safe: Phase 2 |
 
-현재 후속 문서([SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md), [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), PLAN-009)는 이 절의 내용만 상세화한다. 후속 단계 항목은 추적용 목록으로 보존하되, 그 내부 상태 플래그·Window 종료 타이머·`SKIP`/복구 상태 기계를 Phase 0 구현 작업으로 끌어오지 않는다.
+현재 후속 문서([SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md), [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), `PLAN-009`(작성 예정))는 이 절의 내용만 상세화한다. 후속 단계 항목은 추적용 목록으로 보존하되, 그 내부 상태 플래그·Window 종료 타이머·`SKIP`/복구 상태 기계를 Phase 0 구현 작업으로 끌어오지 않는다.
 
 ---
 
@@ -387,9 +388,9 @@ Phase 0에서는 고정 `Epoch`/`Hyperperiod` 시험 테이블과 기존 노드 
 | **[HLD-009](HLD-009-data-driven-workload.md)** | 실행 계층에 독립인 SHM `ALL` 준비 조건과 L1 TT/L2 CBS 어댑터 경계, RT/비RT 책임을 정의한다. |
 | **[DDR-009](DDR-009-data-driven-workload.md)** | 공통 SHM/futex, 단일 `CAS`, 실행 클래스 독립성, 계층별 dispatch 결정을 기록한다. |
 | **[LLD-009](LLD-009-data-driven-workload.md)** | 공통 DAG 메타, TT/CBS 실행 어댑터, 계층 혼합 시험을 상세화한다. |
-| **PLAN-009** | Phase 0 구현·단위/통합 검증 작업(`WP-0` ~ `WP-5`)만 실행 계획으로 분해하고 활성 요구사항 및 테스트 케이스에 연결한다. Phase 1/2 작업은 선행 완료 조건으로 연결하지 않는다. |
+| **`PLAN-009`** *(작성 예정)* | Phase 0 구현·단위/통합 검증 작업(`WP-0` ~ `WP-5`)만 실행 계획으로 분해하고 활성 요구사항 및 테스트 케이스에 연결한다. Phase 1/2 작업은 선행 완료 조건으로 연결하지 않는다. |
 
-추적 방향은 **REQ-009(Phase 0 적용 부분) → SRS-009 → HLD-009 / DDR-009 / LLD-009 → PLAN-009 및 시험**이다. 각 후속 문서는 적용 단계(`Phase 0`)를 명시해야 한다(SHALL). Phase 1/2 착수 시 해당 이관 항목을 활성화하고 추적 매트릭스를 확장한다.
+추적 방향은 **REQ-009(Phase 0 적용 부분) → SRS-009 → HLD-009 / DDR-009 / LLD-009 → `PLAN-009`(작성 예정) 및 시험**이다. 각 후속 문서는 적용 단계(`Phase 0`)를 명시해야 한다(SHALL). Phase 1/2 착수 시 해당 이관 항목을 활성화하고 추적 매트릭스를 확장한다.
 
 ---
 

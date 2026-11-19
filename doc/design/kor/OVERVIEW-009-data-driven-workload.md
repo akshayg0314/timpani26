@@ -9,8 +9,8 @@ SPDX-License-Identifier: MIT
 |:--|:--|
 | 목적 | Data-Driven Workload를 무엇에 쓰고, 어떻게 실행하며, 현재 어디까지 지원하는지 빠르게 설명한다 |
 | 독자 | 아키텍처, 스케줄러, 애플리케이션, 검증 담당자 |
-| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안과 연계 문서 008·011 |
-| 상태 | **Draft / 구현 및 승인 전**. 실행 결과나 인터페이스 승인 완료를 뜻하지 않는다 |
+| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-20 현행화)과 연계 문서 008·011 |
+| 상태 | **Draft — Phase 0 조건부 설계 승인** (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님) |
 
 > **한 문장 요약:** 필요한 선행 작업이 모두 끝나면 후행 Task가 실행 후보가 된다. 실제 실행 시점은 Task가 원래 가진 TT 또는 CBS 규칙이 결정한다.
 
@@ -56,7 +56,7 @@ Data-Driven Workload는 **필요한 선행 데이터가 모두 준비된 직후�
 | 핵심 목표 | 의미 |
 |:--|:--|
 | **정확한 순서** | 모든 직속 선행이 완료되기 전에는 후행 Task가 실행되지 않는다 |
-| **빈 대기 축소** | 선행 데이터가 준비되면 다음 검증 없이 불필요한 대기 시간을 만들지 않는다 |
+| **빈 대기 축소** | 선행 데이터가 준비되면 다음 고정 시각까지 불필요한 대기 시간을 만들지 않는다 |
 | **기존 스케줄러 유지** | DAG 역할은 Task를 L1/L2로 바꾸지 않으며, TT/CBS가 자체 규칙을 계속 적용한다 |
 
 앱은 실제 데이터(`payload`)를 관리하고 완료 신호만 전달한다. TIMPANI는 데이터 자체를 전송하지 않고, **어떤 Task가 어느 선행 데이터를 기다리는지**와 **실행 후보가 되었는지**만 관리한다.
@@ -100,7 +100,7 @@ flowchart LR
 |:--|:--|
 | **Hyperperiod** | TT/L1 슬롯 패턴이 반복되는 주기 |
 | **Activation Window** | 특정 Task의 실행을 허용하는 시간 구간, Phase 1 이후 |
-| **적용 경계** | 런타임 테이블이 새 값으로 바뀌는 시점, [REQ-011](REQ-011-runtime-table-update.md) |
+| **적용 경계** | 런타임 테이블이 새 값으로 바뀌는 시점, [DDR-011](DDR-011-runtime-table-update.md)(`REQ-011` 연계) |
 | **E2E deadline** | Source 완료부터 Sink 완료까지 허용되는 전체 지연 |
 
 `Data-Ready` 시점, Task 실행 구간, 테이블 적용 경계는 서로 다른 개념이다.
@@ -194,10 +194,11 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 
 ### 잘못된 깨움은 어떻게 막는가?
 
-- **같은 체인 주기의 데이터만 사용:** 결과 기록과 완료 표시가 대응하고, 이전·다음 주기의 입력은 서로 섞이지 않는다.
-- **유효한 연결 계획만 적용:** 누락되거나 중복된 선행 연결이 있는 계획은 실행 전에 거절한다.
-- **부분 전달을 남기지 않음:** 하나의 완료 신호가 여러 후행 Task로 전달될 때 유효하지 않은 연결이 있으면, 일부만 전달된 상태를 남기지 않는다.
-- **제어 신호를 데이터 완료로 오인하지 않음:** 테이블 게시·종료 같은 제어 알림으로는 Task를 실행하지 않는다.
+- **같은 체인 주기의 `job_token`만 수락:** 결과 기록과 `signal_ready(job_token)` 완료 표시가 활성 `ready_sequence`와 일치해야 하며, 중복 token은 `EALREADY`, 낡은·미래 token은 `ESTALE`로 거절해 이전·다음 주기의 입력이 섞이지 않는다.
+- **유효한 연결 계획만 적용:** `TaskReference(workload_id, task_id)`(Phase 0 동일 workload 한정) 및 incoming-edge/`required_mask` 1:1 대응(bijection)을 위반하거나 누락·중복된 선행 연결이 있는 계획은 실행 전에 거절한다.
+- **부분 전달을 남기지 않음:** 하나의 완료 신호가 여러 후행 Task로 전달될 때 첫 상태 변경 전에 전체 outgoing-edge를 preflight 검증하므로, 유효하지 않은 연결이나 실패 destination이 있으면 일부만 전달된 상태를 남기지 않는다.
+- **게시 직렬화 및 SHM 재검증:** `publication_guard`로 상태 갱신과 테이블 게시를 직렬화하고, 매 transaction 전 SHM mapping 크기·`fstat()`/이름 identity 재검증 및 `O_RDWR`/`O_RDONLY` 권한 규약을 확인한다.
+- **제어 신호를 데이터 완료로 오인하지 않음:** `dispatch_counter` 증가가 없는 테이블 게시·종료 같은 제어 알림으로는 Task를 실행하지 않는다(`ESTALE`).
 - **기존 실행 조건 유지:** `Data-Ready`만으로 L1의 예약 시각이나 L2의 예산 규칙을 우회하지 않는다.
 
 동기화와 인터페이스 구현 세부는 [LLD-009](LLD-009-data-driven-workload.md)에서 다룬다.
@@ -210,8 +211,8 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 
 | 확인 대상 | 의미 |
 |:--|:--|
-| **연결** | 모든 선행 Task가 실제로 존재하고, 자기 자신은 선행으로 지정하지 않는다 |
-| **식별자** | Task 이름이 중복되거나 이름 해시가 충돌하지 않는다 |
+| **연결** | `TaskReference(workload_id, task_id)`로 선행을 지정하며 Phase 0은 같은 workload 내 참조만 허용한다. 모든 선행 Task가 존재하고 자기 자신은 지정하지 않는다 |
+| **식별자·실행 계층** | `(workload_id, task_id)` 중복이나 해시 쌍 충돌이 없어야 하며, `optional TaskInfo.temporal_class`는 명시값 우선·미지정 시 `SchedInfo.temporal_class` 상속 규칙을 따른다 |
 | **순환** | Task들이 앞에서 뒤로 일관된 실행 순서를 만들 수 있다. 모두 배치할 수 없으면 `A → B → A` 같은 순환 고리다 |
 | **용량** | Task·선행·후행 연결 수가 지원 범위 안이다 |
 | **준비 조건 대응** | 각 직속 선행은 하나의 독립된 완료 조건과 연결되고, 누락되거나 중복된 완료 조건이 없다 |
@@ -248,7 +249,7 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 | **시험 형태** | 단일 노드·고정 테이블·명확한 주기 조건에서 기본 체인 연속 구동 |
 | **실행 계층** | Task는 원래 L1 TT 또는 L2 CBS 계층을 유지하며, `ALL`은 각 계층의 실행 허가만 추가한다 |
 | **아직 보장하지 않음** | `Activation Window`, 정량 `E2E`, Pipeline 포함 런타임 갱신, 장애 복구·Fallback |
-| **연계 기준** | [REQ-011](REQ-011-runtime-table-update.md)의 게시 안정성·제어 wake 구분을 따라 일반 TT 갱신 회귀를 막는다 |
+| **연계 기준** | [DDR-011](DDR-011-runtime-table-update.md)(`REQ-011` 연계)의 게시 안정성·제어 wake 구분을 따라 일반 TT 갱신 회귀를 막는다 |
 
 Phase 0 완료는 기본 Data-Driven 체인이 동작함을 뜻하며, 기능안전·Fail-Safe 운용 승인이나 모든 실시간 보장을 뜻하지 않는다.
 
@@ -300,16 +301,16 @@ Phase 0 합격 여부는 다음 네 가지로 판단한다.
 
 ---
 
-## 10. 무엇을 합의해야 하는가
+## 10. 승인 현황과 후속 합의 항목
 
-| 결정 | 검토 질문 |
+| 결정 | Phase 0 상태 / 후속 검토 질문 |
 |:--|:--|
-| **Pipeline 선언 형식** | Task의 선행 관계와 L1/L2 실행 클래스를 독립적으로 어떻게 표현하는가? |
-| **공유 메모리/API** | Data-Driven 상태가 008·011의 기존 SHM 계약과 어떻게 공존하는가? |
-| **TT/CBS 실행 연결** | `ALL` 완료 후에도 각 계층의 slot, 예산, Gap 규칙을 어떻게 그대로 지키는가? |
-| **후속 시간·복구 계약** | Phase 1의 혼합 DAG `E2E`와 Phase 2의 `SKIP`·Fallback·재시작을 어떤 기준으로 추가하는가? |
+| **Pipeline 선언 형식 (`OI-DD-01`)** | **인터페이스 승인** — `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`, `(workload_id_hash, task_id_hash)` 공통 메타 |
+| **공유 메모리/API (`OI-DD-02`)** | **조건부 승인** — 784B prefix 뒤 extension header·`pipeline[]`, `publication_guard`, `job_token` 일치, 매 호출 SHM 크기·identity 재검증 및 `O_RDWR`/`O_RDONLY` 시험 통과 조건 |
+| **TT/CBS 실행 연결 (`OI-DD-03`)** | **조건부 승인** — L1 TT slot `dispatch_counter` gate, L2 `ALL` fan-out commit 후 CBS budget/Gap gate, 혼합 조합·부분 입력·prevalidation 시험 통과 조건 |
+| **후속 시간·복구 계약 (`OI-DD-04`~`08`)** | **Phase 1/2 미결** — 혼합 DAG `E2E`, `Activation Window`, Pipeline 갱신, `SKIP`·`DATA_TIMEOUT`·Fallback·재시작 복구 기준 |
 
-Phase 0에서는 **Task 클래스 변경 없이 L1/L2 혼합 기본 체인이 동작함**까지 확인한다. 아래 행의 프로토콜·SHM·공개 API 변경은 Project Leader 승인 후 적용한다.
+Phase 0에서는 **Task 클래스 변경 없이 L1/L2 혼합 기본 체인이 동작함**까지 확인한다. 위 표의 조건부 승인 항목(`OI-DD-02`, `OI-DD-03`)은 지정된 검증 시험 통과 전까지 구현 병합을 보류하며, 후속 단계 프로토콜·SHM·공개 API 변경은 Project Leader 승인 후 적용한다.
 
 ---
 
@@ -322,7 +323,7 @@ Phase 0에서는 **Task 클래스 변경 없이 L1/L2 혼합 기본 체인이 �
 | [DDR-009](DDR-009-data-driven-workload.md) | 설계 결정과 그 이유를 확인할 때 |
 | [HLD-009](HLD-009-data-driven-workload.md) | O, N, 앱의 책임과 전체 흐름을 확인할 때 |
 | [LLD-009](LLD-009-data-driven-workload.md) | 구조, 상태, 알고리즘과 구현 순서를 확인할 때 |
-| [OVERVIEW-008](../DDR-008-event-driven-workload/OVERVIEW-008-event-driven-workload-support.md) | Event-Driven 모델과의 경계를 비교할 때 |
-| [REQ-011](REQ-011-runtime-table-update.md) / [DDR-011](DDR-011-runtime-table-update.md) | runtime table update와 생명주기 제약을 비교할 때 |
+| [OVERVIEW-008](OVERVIEW-008-event-driven-workload-support.md) | Event-Driven 모델과의 경계를 비교할 때 |
+| `REQ-011`(미작성) / [DDR-011](DDR-011-runtime-table-update.md) | runtime table update와 생명주기 제약을 비교할 때 |
 
 **권장 읽기 순서:** Overview → REQ → DDR → HLD → SRS → LLD. 008과 011은 공통 SHM, runtime update, 종료 계약을 다룰 때 함께 확인한다.

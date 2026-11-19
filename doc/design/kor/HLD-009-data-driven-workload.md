@@ -6,8 +6,8 @@ SPDX-License-Identifier: MIT
 # HLD-009: Data-Driven Workload — Phase 0 상위 레벨 아키텍처 설계
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-01  
-**상태:** Draft — Phase 0 설계안 (현재 구현의 충족 선언 아님)  
+**최종 수정:** 2026-11-20  
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 현재 구현의 충족 선언 아님)  
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)  
 **결정/상세:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -121,7 +121,7 @@ sequenceDiagram
     participant A as TT/CBS adapter
     participant BPF as scx_timpani
 
-    Note over P: Source는 기존 L1 TimerMaster counter 또는 L2 Event release 사용
+    Note over P: Source는 기존 L1 Timer Master counter 또는 L2 Event release 사용
     P->>SHM: token-k payload 게시 후 signal_ready(k)
     SHM->>SHM: 전체 outgoing-edge 목록 검증/preflight
     SHM->>SHM: 실패 plan은 무변경 거절 또는 각 predecessor bit commit
