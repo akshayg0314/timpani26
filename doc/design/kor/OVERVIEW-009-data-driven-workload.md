@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 |:--|:--|
 | 목적 | Data-Driven Workload를 무엇에 쓰고, 어떻게 실행하며, 현재 어디까지 지원하는지 빠르게 설명한다 |
 | 독자 | 아키텍처, 스케줄러, 애플리케이션, 검증 담당자 |
-| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-20 현행화)과 연계 문서 008·011 |
+| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-20 현행화, 리뷰 `I-01`~`I-09`·`D-01`~`D-05` 반영)과 연계 문서 008·011 |
 | 상태 | **Draft — Phase 0 조건부 설계 승인** (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님) |
 
 > **한 문장 요약:** 필요한 선행 작업이 모두 끝나면 후행 Task가 실행 후보가 된다. 실제 실행 시점은 Task가 원래 가진 TT 또는 CBS 규칙이 결정한다.
@@ -194,11 +194,11 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 
 ### 잘못된 깨움은 어떻게 막는가?
 
-- **같은 체인 주기의 `job_token`만 수락:** 결과 기록과 `signal_ready(job_token)` 완료 표시가 활성 `ready_sequence`와 일치해야 하며, 중복 token은 `EALREADY`, 낡은·미래 token은 `ESTALE`로 거절해 이전·다음 주기의 입력이 섞이지 않는다.
-- **유효한 연결 계획만 적용:** `TaskReference(workload_id, task_id)`(Phase 0 동일 workload 한정) 및 incoming-edge/`required_mask` 1:1 대응(bijection)을 위반하거나 누락·중복된 선행 연결이 있는 계획은 실행 전에 거절한다.
+- **같은 체인 주기의 `job_token` 취득 및 FIFO 소비:** L1/L2 Source는 활성화 직후 `ttsched_current_job_token()`으로 공통 `job_token`을 취득·고정하고, `signal_ready(job_token)`은 활성 `ready_sequence`와 일치하는 신호만 수락한다(중복 token `EALREADY`, 낡은·미래 token `ESTALE`). Successor의 `wait_data()`는 FIFO 순차 소비로 token을 반환해 이전·다음 주기의 입력 혼합과 하류 교착을 막는다.
+- **유효한 연결 계획만 적용:** `TaskReference(workload_id, task_id)`(Phase 0 동일 workload 및 노드 내 유일 `1..15`바이트 ASCII `task_id` 한정, 중복 선행 선언 거절) 및 incoming-edge/`required_mask` 1:1 대응(bijection)을 위반하거나 누락·중복된 선행 연결이 있는 계획은 실행 전에 거절한다.
 - **부분 전달을 남기지 않음:** 하나의 완료 신호가 여러 후행 Task로 전달될 때 첫 상태 변경 전에 전체 outgoing-edge를 preflight 검증하므로, 유효하지 않은 연결이나 실패 destination이 있으면 일부만 전달된 상태를 남기지 않는다.
-- **게시 직렬화 및 SHM 재검증:** `publication_guard`로 상태 갱신과 테이블 게시를 직렬화하고, 매 transaction 전 SHM mapping 크기·`fstat()`/이름 identity 재검증 및 `O_RDWR`/`O_RDONLY` 권한 규약을 확인한다.
-- **제어 신호를 데이터 완료로 오인하지 않음:** `dispatch_counter` 증가가 없는 테이블 게시·종료 같은 제어 알림으로는 Task를 실행하지 않는다(`ESTALE`).
+- **게시 직렬화 및 무-VFS RT 원자 검증:** 쓰기 경로(`signal_ready`, `Timer Master`)는 `publication_guard`(`5 ms` 정상 drain / `50 ms` 종료 Safe Abandonment)로 테이블 게시와 직렬화하고, 읽기 전용 소비자(`wait_data`, `current_job_token`)는 `publication_guard`에 쓰지 않는 읽기 전용 seqlock으로 `O_RDONLY` 매핑을 보호한다. `fstat()` 크기 확인은 비RT `ttsched_init()`에서만 수행하며 RT 경로는 VFS 시스템 콜 없이 `magic`/`generation`/`instance_id` 원자 로드로만 교체·무효화를 탐지한다.
+- **제어 신호를 데이터 완료로 오인하지 않음:** `dispatch_counter` 증가가 없는 테이블 게시·종료 같은 제어 알림으로는 Task를 실행하지 않으며(`ESTALE`), L1 TT Successor도 `pending ready`가 없으면 `current_slot_map`을 활성화하지 않는다.
 - **기존 실행 조건 유지:** `Data-Ready`만으로 L1의 예약 시각이나 L2의 예산 규칙을 우회하지 않는다.
 
 동기화와 인터페이스 구현 세부는 [LLD-009](LLD-009-data-driven-workload.md)에서 다룬다.
@@ -211,8 +211,8 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 
 | 확인 대상 | 의미 |
 |:--|:--|
-| **연결** | `TaskReference(workload_id, task_id)`로 선행을 지정하며 Phase 0은 같은 workload 내 참조만 허용한다. 모든 선행 Task가 존재하고 자기 자신은 지정하지 않는다 |
-| **식별자·실행 계층** | `(workload_id, task_id)` 중복이나 해시 쌍 충돌이 없어야 하며, `optional TaskInfo.temporal_class`는 명시값 우선·미지정 시 `SchedInfo.temporal_class` 상속 규칙을 따른다 |
+| **연결** | `TaskReference(workload_id, task_id)`로 선행을 지정하며 Phase 0은 같은 workload 내 참조만 허용한다. 모든 선행 Task가 존재하고 자기 자신이나 동일 선행 중복(`[A, A]`)을 지정하지 않는다 |
+| **식별자·실행 계층** | 노드 내 유일 `1..15`바이트 ASCII `task_id`와 `(workload_id, task_id)` 유일성·해시 쌍 충돌 부재를 만족해야 하며, `optional TaskInfo.temporal_class`는 명시값 우선·미지정 시 `SchedInfo.temporal_class` 상속 규칙을 따른다 |
 | **순환** | Task들이 앞에서 뒤로 일관된 실행 순서를 만들 수 있다. 모두 배치할 수 없으면 `A → B → A` 같은 순환 고리다 |
 | **용량** | Task·선행·후행 연결 수가 지원 범위 안이다 |
 | **준비 조건 대응** | 각 직속 선행은 하나의 독립된 완료 조건과 연결되고, 누락되거나 중복된 완료 조건이 없다 |
@@ -305,9 +305,9 @@ Phase 0 합격 여부는 다음 네 가지로 판단한다.
 
 | 결정 | Phase 0 상태 / 후속 검토 질문 |
 |:--|:--|
-| **Pipeline 선언 형식 (`OI-DD-01`)** | **인터페이스 승인** — `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`, `(workload_id_hash, task_id_hash)` 공통 메타 |
-| **공유 메모리/API (`OI-DD-02`)** | **조건부 승인** — 784B prefix 뒤 extension header·`pipeline[]`, `publication_guard`, `job_token` 일치, 매 호출 SHM 크기·identity 재검증 및 `O_RDWR`/`O_RDONLY` 시험 통과 조건 |
-| **TT/CBS 실행 연결 (`OI-DD-03`)** | **조건부 승인** — L1 TT slot `dispatch_counter` gate, L2 `ALL` fan-out commit 후 CBS budget/Gap gate, 혼합 조합·부분 입력·prevalidation 시험 통과 조건 |
+| **Pipeline 선언 형식 (`OI-DD-01`)** | **인터페이스 승인** — `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`(노드 내 유일 `1..15`B ASCII `task_id`, 중복 선행 거절), `(workload_id_hash, task_id_hash)` 공통 메타 |
+| **공유 메모리/API (`OI-DD-02`)** | **조건부 승인** — 784B prefix 뒤 `40B` extension header(`instance_id`/`origin_epoch_ns`/`hyperperiod_us`)·`pipeline[]`, `ttsched_current_job_token()`·읽기 전용 seqlock `wait_data()`(FIFO)·`signal_ready()`, 비RT `fstat()` + RT 무-VFS 원자 검증, `publication_guard`(`5 ms`/`50 ms` Safe Abandonment) 및 DAC/POSIX ACL 시험 통과 조건 |
+| **TT/CBS 실행 연결 (`OI-DD-03`)** | **조건부 승인** — L1 TT slot 선행 `pending` 확인 후 `current_slot_map`/`dispatch_counter` gate(`pending == false` 시 `SLOT_NONE` 유지), L2 `ALL` fan-out commit 후 CBS budget/Gap gate, 혼합 조합·부분 입력·prevalidation 시험 통과 조건 |
 | **후속 시간·복구 계약 (`OI-DD-04`~`08`)** | **Phase 1/2 미결** — 혼합 DAG `E2E`, `Activation Window`, Pipeline 갱신, `SKIP`·`DATA_TIMEOUT`·Fallback·재시작 복구 기준 |
 
 Phase 0에서는 **Task 클래스 변경 없이 L1/L2 혼합 기본 체인이 동작함**까지 확인한다. 위 표의 조건부 승인 항목(`OI-DD-02`, `OI-DD-03`)은 지정된 검증 시험 통과 전까지 구현 병합을 보류하며, 후속 단계 프로토콜·SHM·공개 API 변경은 Project Leader 승인 후 적용한다.

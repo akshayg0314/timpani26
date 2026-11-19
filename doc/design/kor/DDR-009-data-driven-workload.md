@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 # DDR-009: Data-Driven Workload — Phase 0 설계 결정 기록
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-20  
+**최종 수정:** 2026-11-20 (Phase 0 내부 기술 리뷰 `I-01`~`I-09` 보완 반영)  
 **상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님)  
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §9, [SRS-009](SRS-009-data-driven-workload.md)  
 **연계 설계:** [HLD-009](HLD-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
@@ -47,14 +47,15 @@ flowchart LR
 - **결정**:
   - `Data-Ready`의 그래프 상태·원자 소비는 SHM에서 공통 처리한다.
   - 실행 dispatch는 Task의 계층에 맡긴다. Phase 0에서 L1은 Task의 TT slot을, L2는 CBS CPU/예산/Gap을 사용한다. Window는 Phase 1 확장이다.
-  - 기존 `struct timpani_ttsched_shm`의 header(`magic`, `n_tasks`, `generation`)와 `tasks[TIMPANI_MAX_TASKS]` 배열(오프셋 `0..783`)은 **크기·오프셋 변경 없이 그대로 유지**한다. 그 뒤쪽에 extension `magic`, ABI `version`, 전체 `abi_size`, `publication_guard`를 담은 16바이트 `pipeline_header`와 `pipeline[TIMPANI_MAX_TASKS]`를 추가한다.
-  - 각 Pipeline slot은 `(workload_id_hash, task_id_hash)`, `ready_state`, `required_mask`, `dispatch_counter`, trigger/model, outgoing edge를 가진다. `ready_state`는 high 32bit 활성 chain-job token/ready sequence와 low 16bit predecessor mask를 하나의 64비트 lock-free CAS로 갱신한다. `dispatch_counter`만 futex wait/wake word이고, 기존 `tasks[i].counter`는 TT 주기 wake에 계속 사용한다.
+  - 기존 `struct timpani_ttsched_shm`의 header(`magic`, `n_tasks`, `generation`)와 `tasks[TIMPANI_MAX_TASKS]` 배열(오프셋 `0..783`)은 **크기·오프셋 변경 없이 그대로 유지**한다. 그 뒤쪽에 extension `magic`, ABI `version`, 전체 `abi_size`, `publication_guard`, `instance_id`, `origin_epoch_ns`, `hyperperiod_us`를 담은 **40바이트 `pipeline_header`**와 `pipeline[TIMPANI_MAX_TASKS]`를 추가한다(전체 `3,128`B).
+  - 각 Pipeline slot은 `(workload_id_hash, task_id_hash)`(`Timpani-N` 내부 결합·진단용), `ready_state`, `required_mask`, `dispatch_counter`, trigger/model, outgoing edge를 가진다. `ready_state`는 high 32bit 활성 chain-job token/ready sequence와 low 16bit predecessor mask를 하나의 64비트 lock-free CAS로 갱신한다. `dispatch_counter`만 futex wait/wake word이고, 기존 `tasks[i].counter`는 TT 주기 wake에 계속 사용한다.
+  - L1/L2 Source는 `pipeline_header.{origin_epoch_ns, hyperperiod_us}`를 읽기 전용 seqlock으로 참조하는 공통 API `ttsched_current_job_token(&token)`을 활성화 직후 1회 호출해 동일 activation ordinal `k`를 취득한다.
 - **이유**:
   1. 데몬 IPC/gRPC 경유는 컨텍스트 스위칭·직렬화 지연으로 `5 μs` 이하 신호 처리 요구사항(`REQ-DD-P0-N-002`)을 만족할 수 없다.
   2. Linux `sched_ext`는 이미 실행 가능(`Runnable`) 상태인 스레드만 스케줄링할 수 있어 대기 중인(`Sleeping`) 후행 스레드를 `kernel` BPF 안에서 직접 깨울 수 없고, 컨테이너에 `CAP_BPF` 특권을 요구하게 된다.
   3. 공통 그래프 `pipeline[]`는 TT `counter`와 독립된 ready/dispatch 상태를 가진다.
   4. 실행 계층은 Task 입력에서 가져오므로 DAG 역할과 무관하다.
-- **조건**: extension ABI `magic/version/abi_size`, object 고정 크기/교체 수명, transaction별 object·mapping 크기 재검증, 64비트 lock-free `ready_state` CAS, 정확한 job token 검증, `dispatch_counter` 전용 futex, token-aware 신규 API/`errno`, O_RDWR/O_RDONLY 권한 계약은 구현 전 승인한다(`CON-DD-05`).
+- **조건**: extension ABI `magic/version/abi_size/instance_id/origin_epoch_ns/hyperperiod_us`, object 고정 크기/교체 수명, 비RT `ttsched_init()` `fstat()` 검증과 RT 무-VFS 순수 원자 재검증, 읽기 전용 seqlock(`wait_data`/`current_job_token`), 64비트 lock-free `ready_state` CAS, 정확한 job token 검증, `dispatch_counter` 전용 futex, token-aware 신규 API/`errno`, DAC/POSIX ACL 권한 계약은 구현 전 승인한다(`CON-DD-05`).
 - **비채택**: 데몬 IPC, 앱의 BPF Map 직접 조작, `Source/Successor`로 실행 클래스를 강제하는 방식.
 - **추적**: `REQ-DD-P0-F-006`, `F-007`, `N-001`, `N-002`, `N-004`; `OI-DD-02`.
 
@@ -67,7 +68,7 @@ flowchart LR
   - `signal_ready(job_token)`는 `job_token == ready_sequence`이고 해당 선행 비트가 미설정일 때만 destination을 변경한다. token이 활성인 동안 같은 선행 비트가 중복되면 `EALREADY`, sequence 증가 후 재시도한 token을 포함한 낡은/미래 token은 `ESTALE`이며 둘 다 상태를 바꾸지 않는다.
   - Source는 첫 destination CAS 전에 전체 outgoing-edge plan을 검증·preflight한다. edge 수, index, self/중복 destination, required-bit 소속, trigger mode, execution model, 각 destination의 token/중복 상태를 확인하며 plan 실패는 전체 fan-out에 mutation이 없다. 한 Source만으로는 다른 선행까지 포함한 global union을 증명할 수 없으므로 runtime preflight는 게시 시 global bijection 검사를 신뢰한다. CAS 재시도 중 동시 동일 호출이 bit/sequence를 먼저 완료하면 늦은 실패가 아니라 수렴 완료로 본다.
   - `ALL` CAS는 `ready_state`의 ready mask를 0으로 만들고 활성 token/ready sequence를 1 증가시키는 단일 lock-free 64비트 CAS다. CAS 실패 때마다 token과 bit 검사를 반복한다. 모든 outgoing-edge CAS가 끝난 뒤 CBS `dispatch_counter` 갱신/futex wake를 수행하며 이 연산들은 publication guard 안에서 게시 세대 전환과 직렬화한다.
-  - `wait_data()`는 `dispatch_counter - 1` token을 반환하고 소비자는 그 token-addressed payload를 읽은 뒤 같은 token을 전달할 수 있다. CBS adapter는 같은 guard 안에서 `dispatch_counter`를 증가시키고, TT adapter는 Timer Master가 허용 slot에서 pending ready가 있을 때만 증가시킨다. 같은 token을 두 번 dispatch하지 않는다.
+  - `ttsched_wait_data()`는 신규 세대 진입 시 `g_last_dispatch_counter = 0U`에서 시작해 `current - 1U`로 점프하지 않고 **FIFO 순차 소비(`token = g_last_dispatch_counter++`)** 로 token을 반환한다(기동 경합 시 token `0` 유실 및 backlog 시 하류 `ready_sequence`와의 영구 `ESTALE` 교착 방지). 소비자는 그 token-addressed payload를 읽은 뒤 같은 token을 다음 단계에 전달한다. CBS adapter는 같은 guard 안에서 `dispatch_counter`를 증가시키고, TT adapter는 Timer Master가 허용 slot에서 pending ready가 있을 때만 증가시킨다. 같은 token을 두 번 dispatch하지 않는다.
 - **이유**:
   - mask 자체에는 주기 신원이 없다. 선행 비트를 반복 OR하면 cycle `N`은 유지하면서 다른 선행의 cycle `N+1` 신호가 나중에 도착해 서로 다른 payload를 섞은 `ALL`이 만들어질 수 있다.
   - 정확 token 일치와 중복 비트 거절은 SHM 필드 추가 없이 논리 instance를 구분한다. mask reset과 sequence 증가를 한 CAS에 넣어 중간 상태의 관측을 차단한다. `dispatch_counter`가 유일한 wake word이므로 ready만 충족된 L1 Task를 TT slot 전에 깨우지 않는다.
@@ -85,9 +86,9 @@ flowchart LR
   - `SchedInfo.temporal_class`는 workload 기본값으로 유지한다. `TaskInfo.temporal_class`는 `optional`이며 Task 값이 있으면 이를 사용하고 없으면 workload 기본값을 상속한다. DAG 역할로 계층을 추론하지 않는다. workload는 생명주기·기본 분류를 묶고 Task override는 각 Task의 TT/CBS 실행 계층을 정하는 009 확장이다.
   - 선행은 `TaskReference(workload_id, task_id)`로 전달한다. 빈 `workload_id`는 현재 workload를 뜻하며 Phase 0에는 같은 workload 내부 참조만 허용한다. `predecessors`와 `trigger_mode=ALL`은 실행 계층을 결정하지 않는다.
   - O는 resolved class에 따라 기존 `TtSlot` 또는 `CbsConfig`를 생성한다. 공통 DAG 메타는 실행 표현과 분리해 `PipelineTaskKey(workload_id_hash, task_id_hash)` 쌍으로 O→N에 전달한다.
-  - Source도 L1 TT 또는 L2 CBS일 수 있다. L1 Source는 기존 `tasks[i].counter` 기반 Timer Master wake, L2 Source는 기존 Event release를 사용한다. 완료 시 동일 `signal_ready` API를 호출할 수 있다.
+  - Source도 L1 TT 또는 L2 CBS일 수 있다. L1 Source는 기존 `tasks[i].counter` 기반 Timer Master wake, L2 Source는 기존 Event release를 사용한다. 두 Source 모두 활성화 직후 `ttsched_current_job_token(&token)`으로 공통 activation ordinal `k`를 고정하고 완료 시 동일 `ttsched_signal_ready(k)` API를 호출한다.
   - Successor의 `ALL`은 ready sequence만 만든다. 실제 dispatch gate는 계층별로 연다.
-    - **L1 TT adapter:** Timer Master가 해당 Task의 TT slot 시각에만 `counter_ahead(ready_sequence, dispatch_counter)`를 확인한다. pending ready가 있으면 `dispatch_counter`를 1 증가시키고 futex wake하며, ready가 없으면 counter를 바꾸지 않는다. slot 전에 wake하거나 일반 Source의 `tasks[i].counter`를 Successor에 사용하지 않는다.
+    - **L1 TT adapter:** Timer Master가 해당 Task의 TT slot 시각에 먼저 `next_tt_start`를 갱신하고 내부 경량 guard(`tm_pipeline_commit_enter`)로 `counter_ahead(ready_sequence, dispatch_counter)`를 확인한다. `pending ready`가 참일 때만 `current_slot_map`을 활성화하고 `dispatch_counter`를 1 증가·futex wake·`scx_bpf_kick_cpu`를 수행한다. `pending ready`가 거짓이면 counter를 바꾸지 않고 `current_slot_map` 미활성화(`SLOT_NONE`) 및 `kick_cpu` 생략으로 `DDR-005`/`DDR-007` missing-task 오탐을 방지한다. slot 전에 wake하거나 일반 Source의 `tasks[i].counter`를 Successor에 사용하지 않는다.
     - **L2 CBS adapter:** Source 호출의 모든 outgoing-edge CAS가 완료된 뒤 `ALL` destination의 `dispatch_counter`를 1 증가시키고 futex wake한다. 실제 CPU dispatch는 wake된 Task가 Runnable이 된 뒤 기존 `scx_timpani` CBS DSQ·budget·Gap gate가 결정한다.
   - N은 DAG나 스케줄 가능성을 다시 계산하지 않고 수신한 metadata와 계층별 gate만 적용한다. BPF에 Data-Ready 의존성 계산이나 별도 Data-Driven DSQ를 추가하지 않는다.
 - **이유**: ready와 실제 실행 허가를 분리하면 L1의 조기 wake를 막으면서 L2의 기존 CBS admission·budget·Gap 경로를 그대로 재사용할 수 있다. Timer Master가 TT slot을 소유하고 BPF가 runnable Task의 CBS 집행을 소유하므로 책임 중복이 없다.
@@ -100,12 +101,12 @@ flowchart LR
 ## 5. D-DD-P0-04 — `DDR-011` Phase 0 안정 게시(`magic`, 짝수 `generation`) 준수 및 제어 wake 분리
 
 - **결정**:
-  - Pipeline client는 mapped fd와 mapping 길이를 보존한다. 매 extension transaction 전에 fd의 현재 `fstat()`, SHM name resolve 결과의 file identity, 현재/full mapping 범위를 확인한 뒤에만 `pipeline_header.magic/version/abi_size`를 읽는다. mapping 축소나 name identity 변경은 `pipeline_header`/`pipeline[]` dereference 전에 `ESTALE`이다. 게시자는 live object마다 전체 ABI 크기를 유지하고, 교체는 `magic` 무효화 + active commit drain + truncate 없는 `unlink`로 수행한다. 구 object mapping은 unmap까지 구조적으로 유효하며 client는 재초기화로 교체 object에 연결한다.
-  - 게시자는 `pipeline_header.publication_guard`의 writer-pending 비트를 설정해 새 commit을 막고, active commit이 `0`이 된 뒤 `tasks[]`·extension header·`pipeline[]`을 갱신한다. 유효화 순서는 `magic=0 → 홀수 generation → 내용 갱신 → 짝수 generation → extension header 유효화/기존 magic 유효화 → writer-pending 해제`다. 게시 자체는 ready 또는 dispatch 순번을 증가시키지 않는다.
-  - 소비자와 L1 Timer Master는 첫 extension 접근 전에 현재 object/identity를 재검증하고 stable ABI/generation을 확인한 뒤 guard를 획득하고 세대를 다시 확인한다. `signal_ready(job_token)`은 활성 token과 선행 비트를 검증한 후 guard 안에서 `ready_state` 64비트 CAS와 필요한 `dispatch_counter` 증가·futex wake를 완료한다. 축소/교체, ABI/세대/identity 오류, writer-pending, 중복 비트, token 불일치는 상태를 변경하지 않고 `-1`과 `errno`로 구분한다.
-  - `ttsched_wait_data()`는 `dispatch_counter`만 futex wait/wake word로 사용하고 실제 증가에서만 `0`과 해당 job token을 반환한다. 게시·종료 control wake는 counter를 증가시키지 않으므로 `ESTALE`이 된다.
-  - **Phase 0:** 최초 게시·무효화/종료와 고정 Pipeline commit 직렬화에 guard를 적용하되 Pipeline 포함 정상 런타임 갱신은 수행하지 않는다. **Phase 1:** 정상 갱신의 적용 경계와 ABI transition에 같은 guard를 사용한다. **Phase 2:** 갱신 실패·rollback·프로세스 재시작 시 남은 guard/상태 회수 규칙을 추가한다.
-- **이유**: 초기화 때의 크기 상태는 이후 truncate나 name 교체에서 낡을 수 있다. opened fd·현재 name identity·mapping 범위를 transaction마다 재검증하면 이 변화를 extension 접근 전에 탐지한다. `fstat()` 하나로 지원되지 않는 동시 inplace truncate를 안전하게 만들 수는 없으므로 live object 고정 크기/no-shrink 소유 규칙이 필요하며, guard는 내용 게시·상태 변경만 담당한다. version 확인, transaction별 object 검증, commit guard는 ABI·수명·동시성의 서로 다른 실패 모드를 분리해 막는다.
+  - Pipeline client는 비RT 초기화 경로(`ttsched_init()`)에서 1회 `fstat()`로 SHM 객체 크기를 확인해 `g_shm_map_size`·`g_shm_pipeline_capable`을 설정하고 `mmap()` 직후 SHM fd를 즉시 닫는다(스레드 종료 시 `pthread_key` destructor로 `munmap`). RT critical path(`signal_ready`, `wait_data`, `current_job_token`, `Timer Master`)에서는 `shm_open`/`fstat`/`close`를 호출하지 않고 순수 사용자 공간 원자 로드(`g_shm_pipeline_capable`, `publication_guard`의 `WRITER_PENDING`, `shm->magic`, 짝수 `generation`, `pipeline_header.{magic, abi_version, abi_size, instance_id}`)만으로 ABI·세대·교체/무효화를 검증한다. 게시자는 live object마다 전체 ABI 크기(`3,128`B)를 고정 유지(no-shrink)하고, 교체·종료는 `WRITER_PENDING` 유지 + active commit drain + `magic=0`/`pipeline_header.magic=0` 무효화 + truncate/in-place 덮어쓰기 없는 `shm_unlink()` + `O_CREAT|O_EXCL` 신규 `instance_id` 객체 생성으로 수행한다.
+  - 게시자는 `pipeline_header.publication_guard`의 `WRITER_PENDING` 비트를 설정해 새 쓰기 commit을 막고, active commit이 `0`이 될 때까지 제한된 시간(`TIMPANI_PUB_DRAIN_TIMEOUT_US = 5 ms` 또는 `min(5 ms, H/4)`, 연속 이연 상한 `2`회; 종료/교체 시 `TIMPANI_PUB_SHUTDOWN_DRAIN_MS = 50 ms`)만 대기한다. `50 ms` 초과 시 **Safe Abandonment**(잔여 카운트 경고 로그 → `WRITER_PENDING` 유지·`magic=0`/`pipeline_header.magic=0` → `ftruncate`/덮어쓰기 금지 → `shm_unlink`)으로 강제 무효화한다. 정상 게시 시 `pipeline_header`는 `publication_guard`를 덮어쓰지 않도록 필드별 release-store로 기록하며, 순서는 `magic=0 → pipeline_header.magic=0 → 홀수 generation → 내용 갱신 → pipeline_header 필드별 release-store(abi/instance_id/origin_epoch_ns/hyperperiod_us/magic) → 짝수 generation → shm->magic=유효 → WRITER_PENDING 해제`다.
+  - 쓰기 경로(`signal_ready`, `Timer Master` 경량 guard)는 `publication_guard`를 획득(실패 롤백 분기도 `pipeline_commit_exit`로 통일해 Lost Wakeup 방지)하고 세대를 재확인한 뒤 packed `ready_state` 64비트 CAS와 `dispatch_counter` 갱신·futex wake를 완료한다. 반면 순수 읽기 소비자 API(`ttsched_wait_data()`, `ttsched_current_job_token()`)는 `publication_guard`에 쓰지 않는 **읽기 전용 seqlock**을 사용해 `O_RDONLY`(`PROT_READ`) 매핑에서 `SIGSEGV`와 guard 누수 없이 동작한다.
+  - `ttsched_wait_data()`는 `dispatch_counter`만 futex wait/wake word로 사용하고 실제 증가에서만 FIFO 순차 소비로 `0`과 해당 job token을 반환한다. 게시·종료 control wake는 counter를 증가시키지 않으므로 `ESTALE`이 된다.
+  - **Phase 0:** 최초 게시·무효화/종료와 고정 Pipeline commit 직렬화에 guard 및 읽기 전용 seqlock을 적용하되 Pipeline 포함 정상 런타임 갱신은 수행하지 않는다. **Phase 1:** 정상 갱신의 적용 경계와 ABI transition에 같은 guard와 `5 ms` drain/`2`회 이연 상한을 사용한다. **Phase 2:** 갱신 실패·rollback·프로세스 재시작 시 남은 상태 회수 규칙을 추가한다.
+- **이유**: RT critical path에서 매 호출 `shm_open`/`fstat`/`close`를 수행하면 VFS/inode 락 경합으로 `signal_ready <= 5 µs`와 L1 TT 타이머 지터 요구를 파괴한다. `live object 고정 크기 / no-shrink` 소유 규약과 `magic=0`/`WRITER_PENDING`/`instance_id` 무효화 계약을 결합하면 비RT `ttsched_init()`의 1회 `fstat()`와 RT 순수 원자 로드만으로 교체·종료를 안전하게 탐지할 수 있다. 또한 `wait_data()`를 읽기 전용 seqlock으로 분리해야 `O_RDONLY` Successor의 `SIGSEGV`와 소비자 크래시에 의한 guard 영구 누수를 함께 차단할 수 있다.
 - **추적**: `REQ-DD-P0-F-005`, `REQ-DD-P0-F-006`, `REQ-DD-P0-N-004`, `OI-DD-02`.
 
 ---
