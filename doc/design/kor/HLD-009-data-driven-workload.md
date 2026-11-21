@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 **최종 수정:** 2026-11-20 (Phase 0 내부 기술 리뷰 `I-01`~`I-09` 보완 반영)  
 **상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 현재 구현의 충족 선언 아님)  
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)  
-**결정/상세:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
+**결정/상세:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](../DDR-011-runtime-table-update/DDR-011-runtime-table-update.md)
 
 ---
 
@@ -56,12 +56,14 @@ flowchart LR
 | **입력 / 시험기** | `Timpani-O` 입력 경로로 동일 주기(`100ms`) DAG 제출, 타임스탬프·오버헤드 증거 수집, 전제 이탈 시 시험 중단 | `Timpani-N`이나 SHM에 직접 테이블/그래프를 주입해 End-to-End 성공으로 판정, 제품 Fail-Safe를 대신 보장 |
 | **`Timpani-O`** | DAG와 Task의 기존 `TemporalClass`를 독립 검증하고 TT/CBS 표현 및 공통 DAG 메타 생성 | DAG 역할로 계층 강제, N에 배치 판단 위임 |
 | **`Timpani-N` 비RT** | 계층별 entry와 공통 `pipeline[]` 로컬 확인·게시 | DAG/TT/CBS 가능성 재계산 |
-| **`Timer Master`** | L1 Task의 허용 slot에서 Data-Driven ready가 있으면 dispatch 어댑터를 연다 | L2 release 담당, L1 ready가 없을 때 실행 |
-| **`libttsched` / 앱** | 클래스와 무관한 `ALL` CAS/ready 순번 갱신·신원 확인 | payload 전달, 제어 wake 실행, 실행 계층 변경 |
+| **`Timer Master`** | L1 Source의 release ordinal을 slot wake 전에 stamp하고, L1 Successor의 허용 slot에서 Data-Driven ready가 있으면 dispatch 어댑터를 연다 | wall-clock 기반 token 생성, L2 release 담당, L1 ready가 없을 때 실행 |
+| **`libttsched` / 앱** | 클래스와 무관한 `ALL` CAS/ready 순번 갱신·신원 확인. 앱은 token-addressed payload를 `signal_ready()` 전에 publish하고 Consumer 처리 완료 전 보존 | payload 저장소·복사·ack API 제공, 제어 wake 실행, 실행 계층 변경 |
 | **`scx_timpani`** | wake로 Runnable이 된 L1은 TT slot에서, L2는 기존 CBS 예산/Gap 경로로 dispatch | 별도 Data-Driven 스케줄링 계층 신설 |
 | **`Fault Monitor`** | 기존 시스템 감시 안전장치 유지 | Phase 0 신규 `DATA_TIMEOUT` 수집·보고 (Phase 2 이관) |
 
 공통 DAG 메타 전달, SHM 후방 `pipeline[]`, 신규 API는 사전 승인 후 반영한다. Task의 기존 TT/CBS entry와 timing 정책은 보존한다.
+
+`/timpani_ttsched`의 `O_RDWR` 권한은 전체 object를 여는 권한이며 slot/header별 보안 경계가 아니다. Phase 0에서 `timpani-pub`는 상호 신뢰된 Source/중계 writer만 포함하고, read-only consumer는 별도 group으로 제한한다. `libttsched`의 신원 검사는 우발적 오사용과 corruption 탐지용이며 악의적 writer에 대한 integrity를 보장하지 않는다.
 
 ---
 
@@ -77,9 +79,11 @@ Phase 0는 같은 workload 참조와 `ALL`만 허용하고 기존 TT slot/CBS ad
 
 N은 Task의 TT/CBS 표현과 공통 DAG 메타를 각각 확인한다. 이름·해시·CPU/slot/budget 참조가 유효하지 않으면 거절한다.
 
-통과한 테이블은 011 규약으로 공통 `pipeline[]`를 채운다. L1 Task는 TT gate, L2 Task는 CBS gate를 사용하도록 어댑터 메타를 등록한다. 게시 자체는 ready/dispatch 순번을 증가시키지 않는다.
+통과한 테이블은 011 규약으로 공통 `pipeline[]`를 채운다. L1 Task는 TT gate, L2 Task는 CBS gate를 사용하도록 어댑터 메타를 등록한다. 게시 자체는 ready/dispatch 순번을 증가시키지 않는다. 최초 Source slot은 token release-invalid로 시작하며 실제 wake authority만이 release ordinal을 stamp한다.
 
 client는 비RT 초기화(`ttsched_init()`) 시 1회 `fstat()`로 SHM 크기와 전체 ABI 매핑 가능 여부를 확인하고 `mmap()` 직후 fd를 닫는다(스레드 종료 시 `pthread_key` destructor로 `munmap`). 이후 RT critical path(`signal_ready`, `wait_data`, `current_job_token`, `Timer Master`)에서는 `shm_open`/`fstat`/`close` 없이 순수 원자 로드(`magic`, 짝수 `generation`, `pipeline_header.{magic, abi_version, abi_size, instance_id}`, `publication_guard`)만으로 ABI·세대·교체/무효화를 검증한다. `Timpani-N`은 live object를 전체 ABI 크기(`3,128`B)로 고정 유지하고, 교체·종료는 `WRITER_PENDING` 유지 + active commit drain(`50 ms` 초과 시 Safe Abandonment) + `magic=0`/`pipeline_header.magic=0` 무효화 + `ftruncate` 없는 `shm_unlink()` + `O_CREAT|O_EXCL` 신규 `instance_id` 객체 생성으로 수행한다.
+
+Safe Abandonment는 구 object의 active operation을 강제 취소하는 것이 아니라 namespace 격리다. late writer는 CAS/wake 직전 stable generation을 재검사하며, 그 뒤 race로 구 object에서 완료될 수 있으나 새 `instance_id` object에는 접근할 수 없다. 구 mapping consumer는 wake 후 stable-state 재검증으로 `ESTALE`하며 실행하지 않는다. 무효화 전에 이미 token을 반환받은 Job은 Safe Abandonment가 회수하지 않는다.
 
 게시자는 `pipeline_header.publication_guard`의 `WRITER_PENDING`을 설정해 새 쓰기 commit 진입을 막고, 기존 활성 commit이 `0`이 될 때까지 제한된 시간(`5 ms` 정상 / `50 ms` 종료) 대기한 뒤 `publication_guard`를 덮어쓰지 않는 필드별 release-store 순서로 SHM 세대(`magic=0` → 홀수 `generation` → 내용·`origin_epoch_ns`/`hyperperiod_us`/`instance_id` 갱신 → 짝수 `generation` → `magic` 유효 → `WRITER_PENDING` 해제)를 전환한다. `signal_ready`와 L1 Timer Master(내부 경량 guard)는 쓰기 commit 중 이 guard로 게시자와 직렬화하며, `ttsched_wait_data()`와 `ttsched_current_job_token()`은 `publication_guard`에 쓰지 않는 **읽기 전용 seqlock**으로 `O_RDONLY` 매핑을 보호한다. Phase 0은 최초 게시·종료/무효화(Safe Abandonment)와 고정 체인의 guard/seqlock을 확인하고, Phase 1은 Pipeline 정상 갱신과 ABI 전환에, Phase 2는 실패·재시작 후 미회수 상태 정리에 이 규약을 확장한다.
 
@@ -102,10 +106,11 @@ stateDiagram-v2
     RUNNING --> WAITING_DATA: token k 처리 후 같은 token 전달
 ```
 
-- packed `ready_state`의 `ALL` CAS부터 계층별 `dispatch_counter` 갱신과 futex wake까지는 게시 commit guard 안에서 수행한다. 게시 시 각 Successor의 직속 incoming edge가 `required_mask`와 일대일임을 먼저 증명한다. 두 edge의 bit alias, 대응 edge 없는 required bit, mask 밖 edge bit를 거절한다. 상태 변경 전에 `signal_ready(k)`는 Source의 전체 outgoing-edge 목록을 검증·preflight하므로 잘못된 metadata 또는 중복/낡은 destination 하나가 있으면 전체 fan-out이 불변이다. 같은 `(predecessor, k)`가 preflight 시 이미 설정됐으면 `EALREADY`, 다른 token이면 `ESTALE`이다. CAS 중 동시 동일 commit이 bit/sequence를 앞서면 수렴으로 처리한다. 하나의 64비트 CAS가 destination mask reset과 ready sequence/job token 증가를 원자적으로 수행한다.
+- packed `ready_state`의 `ALL` CAS부터 계층별 `dispatch_counter` 갱신과 futex wake까지는 게시 commit guard 안에서 수행한다. 게시 시 각 Successor의 직속 incoming edge가 `required_mask`와 일대일임을 먼저 증명한다. 두 edge의 bit alias, 대응 edge 없는 required bit, mask 밖 edge bit를 거절한다. 상태 변경 전에 `signal_ready(k)`는 Source의 전체 outgoing-edge 목록을 검증·preflight하므로 잘못된 metadata 또는 중복/낡은 destination 하나가 첫 CAS 전에 확인되면 전체 fan-out이 불변이다. 같은 `(predecessor, k)`가 preflight 시 이미 설정됐으면 `EALREADY`, 다른 token이면 `ESTALE`이다. CAS 중 동시 동일 commit이 bit/sequence를 앞서면 수렴으로 처리한다. 하나의 64비트 CAS가 destination mask reset과 ready sequence/job token 증가를 원자적으로 수행한다.
+- 전체 fan-out은 **preflight failure atomicity**만 보장한다. 첫 CAS 이후 Source process가 종료하면 일부 destination에만 bit가 남을 수 있다. Phase 0은 해당 chain run을 실패·전제 이탈로 처리하며 crash transaction, rollback, idempotent retry는 Phase 2 recovery 범위다.
 - `ALL`은 ready sequence만 만든다. L1 Successor는 Timer Master가 자신의 TT slot에서 `next_tt_start` 갱신 후 내부 경량 guard로 `pending`을 확인한 경우에만 `current_slot_map`을 활성화하고 `dispatch_counter`를 1 증가·futex wake·`kick_cpu`하며, L2 Successor는 모든 outgoing-edge CAS가 완료된 `ALL` commit에서 1 증가시킨다. `dispatch_counter`만 futex word다.
 - L1 slot 시 `pending ready`가 없으면 `current_slot_map`을 활성화하지 않고(`SLOT_NONE`) `kick_cpu` 및 wake를 생략한다(`wake 0`). slot을 지난 ready는 다음 TT slot까지 pending으로 유지하며, Phase 0 정상 시험은 pending 1개까지만 포함한다.
-- `ttsched_wait_data()`는 읽기 전용 seqlock(`O_RDONLY` 지원)으로 `dispatch_counter`를 확인해 `current - 1U`로 점프하지 않고 FIFO 순차(`g_last_dispatch_counter++`)로 `job_token`을 반환한다.
+- `ttsched_init()`는 자기 slot의 현재 `dispatch_counter`를 attach cursor로 snapshot한다. 정상 Phase 0에서는 최초 dispatch 전에 이 초기화를 완료하므로 token `0`이 보존되고, late attach는 과거 token을 replay하지 않는다. `ttsched_wait_data()`는 읽기 전용 seqlock(`O_RDONLY` 지원)으로 그 cursor 이후 dispatch를 확인해 `current - 1U`로 점프하지 않고 FIFO 순차(`g_last_dispatch_counter++`)로 `job_token`을 반환한다.
 - futex wake 후 Task가 Runnable이 되어야 기존 BPF 경로가 실행한다. L1은 TT slot에서, L2는 CBS budget/Gap에서 실제 CPU dispatch를 받는다.
 - dispatch 증가가 없는 제어 wake, 무효화·교체된 SHM(`magic=0`/`instance_id` 불일치), writer-pending/ABI 불일치, 또는 pending ready가 없는 gate는 실행으로 이어지지 않는다.
 
@@ -122,8 +127,10 @@ sequenceDiagram
     participant A as TT/CBS adapter
     participant BPF as scx_timpani
 
-    Note over P: Source는 L1/L2 활성화 직후 ttsched_current_job_token(&k)으로 공통 token k 취득
-    P->>SHM: token-k payload 게시 후 signal_ready(k)
+    Note over P: release authority가 wake 전 Source slot에 activation ordinal k를 stamp
+    Note over P: Source는 지연된 앱 활성화 시에도 ttsched_current_job_token(&k)으로 stamp된 k를 취득
+    Note over P: 앱 소유 token-k payload 저장소에 최종 결과를 publish
+    P->>SHM: signal_ready(k)
     SHM->>SHM: 전체 outgoing-edge 목록 검증/preflight
     SHM->>SHM: 실패 plan은 무변경 거절 또는 각 predecessor bit commit
     SHM->>SHM: 마지막 일치 입력이면 packed ALL CAS + ready_sequence++
@@ -135,7 +142,7 @@ sequenceDiagram
         SHM->>SHM: 전체 outgoing-edge CAS 뒤 dispatch_counter++
         SHM->>D: futex CBS release wake
     end
-    D->>D: wait_data(읽기 전용 seqlock, FIFO)가 token k 반환 후 token-k payload 읽기
+    D->>D: wait_data(읽기 전용 seqlock, FIFO)가 token k 반환 후 같은 token의 앱 payload 읽기
     D->>BPF: Runnable, 원래 Task class 유지
     BPF-->>D: TT slot 또는 CBS budget/Gap에 따라 실행
     D->>SHM: 처리 후 다음 Successor에 signal_ready(k)
