@@ -6,8 +6,8 @@ SPDX-License-Identifier: MIT
 # HLD-009: Data-Driven Workload — Phase 0 High-Level Architecture Design
 
 **Date:** 2026-10-27
-**Last Updated:** 2026-11-01
-**Status:** Draft — Phase 0 design proposal (not a declaration that the current implementation is compliant)
+**Last Updated:** 2026-11-22 (Phase 0 design consistency update)
+**Status:** Draft — Conditional Phase 0 design approval (`OI-DD-01` structural approval, conditional upon confirming field-number 008 consistency with the common registry; `OI-DD-02`/`OI-DD-03` conditionally approved; not a declaration that the current implementation satisfies it)
 **Parent Baseline:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)
 **Decisions / Details:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -15,7 +15,7 @@ SPDX-License-Identifier: MIT
 
 ## 1. Scope and Architecture
 
-This document defines the flow of a **Data-Driven DAG that is independent of a Task's existing L1 TT/L2 CBS layer** on a single node with a fixed `Epoch`/`Hyperperiod`, under basic chain conditions. A Source/Successor role does not determine the execution layer. Precise per-layer Window/Gap control, multiple periods, updates, and `SKIP` are deferred to subsequent phases.
+This document defines a **Data-Driven DAG independent of the Task's existing L1 TT/L2 CBS layer** on a single node under fixed `Epoch`/`Hyperperiod` and basic-chain conditions. A Source/Successor role does not determine the execution layer. Precise per-layer Window/Gap control, multiple periods, updates, and `SKIP` are deferred to subsequent phases.
 
 ```mermaid
 flowchart LR
@@ -53,15 +53,17 @@ flowchart LR
 
 | Component | Phase 0 Responsibility | Does Not Do |
 |:---|:---|:---|
-| **Input / Test Harness** | Submit a same-period (`100ms`) DAG through the `Timpani-O` input path, collect timestamp and overhead evidence, and abort the test when prerequisites are violated. | Inject a table/graph directly into `Timpani-N` or SHM and treat that as End-to-End success, or guarantee product Fail-Safe behavior instead of the product. |
+| **Input / Test Harness** | Submit a same-period (`100ms`) DAG through the `Timpani-O` input path, collect timestamp and overhead evidence, and abort the test if assumptions are violated. | Inject a table/graph directly into `Timpani-N` or SHM and treat that as End-to-End success, or guarantee product Fail-Safe behavior in place of the product. |
 | **`Timpani-O`** | Independently validate the DAG and the Task's existing `TemporalClass`, and generate the TT/CBS representation and common DAG metadata. | Force an execution layer from the DAG role or delegate placement decisions to N. |
-| **`Timpani-N` Non-RT** | Locally verify and publish the layer-specific entries and common `pipeline[]`. | Recalculate DAG/TT/CBS feasibility. |
-| **`Timer Master`** | Open the dispatch adapter when Data-Driven ready exists in an allowed slot for an L1 Task. | Handle L2 release or execute an L1 Task when no ready state exists. |
-| **`libttsched` / App** | Perform class-independent `ALL` CAS/ready sequence updates and identity verification. | Deliver payloads, execute a control wake, or change the execution layer. |
-| **`scx_timpani`** | After the wake makes a Task Runnable, dispatch L1 in its TT slot and L2 through the existing CBS budget/Gap paths. | Create a separate Data-Driven scheduling layer. |
-| **`Fault Monitor`** | Retain the existing system-monitoring safety mechanisms. | Collect and report the new Phase 0 `DATA_TIMEOUT` (deferred to Phase 2). |
+| **`Timpani-N` Non-RT** | Verify and publish the per-layer entries and common `pipeline[]` locally. | Recalculate DAG/TT/CBS feasibility. |
+| **`Timer Master`** | At `start()`, fix a single `base_cycle_start`, stamp the Pipeline-period release ordinal for an L1 Source before the slot wake, and, when Data-Driven ready exists in an allowed slot for an L1 Successor, perform `update_current_slot()` and `dispatch_counter++`/futex wake (including SHM publication of CBS/Pipeline Task metadata). | Generate a token from the wall clock, handle L2 release, perform `update_current_slot()`/overwrite `SLOT_NONE`/wake when L1 ready is absent, or directly call `scx_bpf_kick_cpu()` from userspace. |
+| **`libttsched` / App** | Update class-independent `ALL` CAS/ready sequence and verify identity (atomic name comparison); an L2 CBS Source event adapter/test generator calls `ttsched_release_source()`. The application publishes the token-addressed payload before `signal_ready()` and retains it until Consumer processing completes. | Provide payload storage, copy, or acknowledgment APIs; execute a control wake; or change the execution layer. |
+| **`scx_timpani`** | Dispatch an awakened and now-Runnable L1 Task in its TT slot and an L2 Task through the existing CBS budget/Gap path. | Create a separate Data-Driven scheduling layer. |
+| **`Fault Monitor`** | Retain existing system-monitoring safety mechanisms. | Collect/report new Phase 0 `DATA_TIMEOUT` (deferred to Phase 2). |
 
-Common DAG metadata transmission, the appended SHM `pipeline[]`, and new APIs are incorporated after prior approval. The existing TT/CBS entries and timing policies are retained for each Task.
+Common DAG metadata transmission, the backward SHM `pipeline[]`, and new APIs are incorporated after prior approval. Each Task's existing TT/CBS entry and timing policy is preserved.
+
+`O_RDWR` permission on `/timpani_ttsched` grants access to the entire object and is not a per-slot/header security boundary. Phase 0 `timpani-pub` includes only mutually trusted Source/intermediary writers, while read-only Consumers are restricted to a separate group. The identity checks in `libttsched` are for detecting accidental misuse and corruption; they do not guarantee integrity against a malicious writer.
 
 ---
 
@@ -69,19 +71,21 @@ Common DAG metadata transmission, the appended SHM `pipeline[]`, and new APIs ar
 
 ### 3.1 H-DD-P0-01 — Offline Candidate Validation and Deterministic Topological Placement (`Timpani-O`)
 
-O prefers an explicit `TaskInfo.temporal_class` and otherwise inherits `SchedInfo.temporal_class` to determine each Task's resolved layer. It normalizes `TaskReference(workload_id, task_id)` values within the current workload, validates the DAG, and creates common dependency metadata keyed by `(workload_id_hash, task_id_hash)`. Each Task retains the existing `TtSlot` or `CbsConfig` representation for its resolved class; the execution layer is not inferred from `predecessors`.
+O prioritizes an explicit `TaskInfo.temporal_class` and otherwise inherits `SchedInfo.temporal_class` to determine each Task's execution layer. It converts the predecessor list `TaskReference(workload_id, task_id)` into normalized Task identifiers in the same workload, validates the DAG, and creates common dependency metadata by `(workload_id_hash, task_id_hash)` key. Each Task retains the existing `TtSlot` or `CbsConfig` representation according to its resolved class, and its execution layer is not inferred from whether `predecessors` is present.
 
-Phase 0 permits same-workload references and `ALL`, and retains the existing TT slot/CBS admission policy. Phase 1 extends cross-workload references, mixed-DAG per-layer response-time aggregation, `E2E`, and Window/Gap conditions. On failure, the committed model is retained.
+Phase 0 permits only same-workload references and `ALL` and uses the existing TT slot/CBS admission policy. Phase 1 extends cross-workload references, aggregation of per-layer response times for a mixed DAG, `E2E`, and Window/Gap conditions. On failure, the committed model is retained.
 
 ### 3.2 H-DD-P0-02 — Node-Local Suitability Verification and Stable SHM Publication (`Timpani-N`)
 
-N verifies the Task's TT/CBS representation and the common DAG metadata separately. It rejects the candidate if any name, hash, or CPU/slot/budget reference is invalid.
+N verifies each Task's TT/CBS representation and the common DAG metadata separately. It rejects the candidate if a name, hash, or CPU/slot/budget reference is invalid.
 
-The accepted table is populated with the common `pipeline[]` according to the 011 contract. Adapter metadata is registered so that an L1 Task uses the TT gate and an L2 Task uses the CBS gate. Publication itself does not increment the ready/dispatch sequence.
+The accepted table is filled with the common `pipeline[]` according to the 011 contract. Adapter metadata is registered so that an L1 Task uses the TT gate and an L2 Task uses the CBS gate. Publication itself does not increment the ready/dispatch sequence. The first Source slot starts with release invalid, and only the actual wake authority may stamp the release ordinal.
 
-At initialization and again before every Pipeline API transaction, the client checks the retained mapping extent, the mapped fd's current `fstat()` size, and that the SHM name still resolves to the same file identity; only then may it read `pipeline_header.magic/version/abi_size`. Truncation or replacement returns `ESTALE` before any extension dereference. Timpani-N keeps a live object at full ABI size and replaces it with invalidation + active-commit drain + `unlink`, not in-place shrink.
+During non-RT client initialization (`void ttsched_init()`, `g_shm_init_errno`, and full TLS reset), the client checks SHM size and whether the complete ABI can be mapped once with `fstat()`, then closes the fd immediately after `mmap()` (`pthread_key` destructor performs `munmap` at thread termination). Thereafter, on RT critical paths (`release_source`, `signal_ready`, `wait_data`, `current_job_token`, and `Timer Master`), it verifies ABI, generation, identity, and replacement/invalidation without `shm_open`/`fstat`/`close`, using only pure atomic loads (`magic`, even `generation`, `pipeline_header.{magic, abi_version, abi_size, instance_id}`, and `publication_guard`) and a 16-byte atomic name comparison. `Timpani-N` holds a live object at the full ABI size (`3,128`B); replacement/shutdown is performed by retaining `WRITER_PENDING` + active-commit drain (Safe Abandonment after exceeding `50 ms`) + `magic=0`/`pipeline_header.magic=0` invalidation + `FUTEX_WAKE(..., INT_MAX)` on all `tasks[]`/`pipeline[]` + `shm_unlink()` without `ftruncate` + creation of a new `instance_id` object with `O_CREAT|O_EXCL`.
 
-The publisher sets writer-pending in the header guard, waits for active commits to reach `0`, and then transitions SHM through odd `generation`, content update, even `generation`, and valid base/extension magic. `signal_ready` and the L1 Timer Master hold the guard while performing the packed `ready_state` CAS or `dispatch_counter` update. Phase 0 verifies initial publication, invalidation/shutdown, truncation/replacement rejection, and a fixed chain; Phase 1 extends this to normal Pipeline updates and ABI transitions; Phase 2 adds reclamation after failure or restart.
+Safe Abandonment is namespace isolation, not forced cancellation of an active operation on the old object. A writer that has already entered the guard performs only a liveness check immediately before CAS/wake (`pipeline_commit_alive`: `magic`/`pipeline_header.magic`/generation/`instance_id`) that excludes `WRITER_PENDING`; it therefore completes the commit and wake during normal drain and stops with `ESTALE` only when invalidated by Safe Abandonment. It may complete on the old object because of a race after the last check, but cannot access a new `instance_id` object. An old-mapping Consumer stops with `ESTALE` when it revalidates stable state after the wake and does not execute. A Job that has already received a token before invalidation is not reclaimed by Safe Abandonment.
+
+The publisher sets `WRITER_PENDING` in `pipeline_header.publication_guard` to prevent new write commits, waits for the existing active-commit count to reach `0` for a bounded time (`min(5 ms, H/4)` during normal operation / `50 ms` at shutdown), and then changes the SHM generation through a field-wise release-store order that does not overwrite `publication_guard`: `magic=0` → odd `generation` → content and atomic-name store, update `origin_epoch_ns`/`hyperperiod_us`/`instance_id` → even `generation` → valid `magic` → release `WRITER_PENDING`. `signal_ready`, `release_source`, and the L1 Timer Master (internal lightweight guard) are serialized with the publisher through this guard during a write commit. `ttsched_wait_data()` and `ttsched_current_job_token()` protect an `O_RDONLY` mapping with a **read-only seqlock** that does not write to `publication_guard` and with atomic name comparison. A thread already bound to one generation returns `ESTALE` rather than implicitly resynchronizing if it observes another generation. Phase 0 verifies initial publication, shutdown/invalidation (Safe Abandonment), and the guard/seqlock for a fixed chain; Phase 1 extends the contract to normal Pipeline updates and ABI transitions; Phase 2 extends it to cleanup of state left after failure/restart.
 
 ### 3.3 H-DD-P0-03 — Common Ready/Dispatch State Transitions and Control-Wake Separation
 
@@ -89,8 +93,8 @@ The publisher sets writer-pending in the header guard, waits for active commits 
 stateDiagram-v2
     [*] --> WAITING_DATA: stable publication (active job token k, mask = 0)
 
-    WAITING_DATA --> PARTIAL_READY: first predecessor for token k
-    PARTIAL_READY --> PARTIAL_READY: additional distinct predecessor for token k
+    WAITING_DATA --> PARTIAL_READY: first predecessor ready for token k
+    PARTIAL_READY --> PARTIAL_READY: another predecessor ready for token k
     PARTIAL_READY --> PARTIAL_READY: duplicate predecessor token -> EALREADY
     WAITING_DATA --> WAITING_DATA: nonactive token -> ESTALE
     PARTIAL_READY --> PARTIAL_READY: nonactive token -> ESTALE
@@ -98,19 +102,21 @@ stateDiagram-v2
     WAITING_DATA --> DISPATCHING: last predecessor for token k -> ALL CAS
     PARTIAL_READY --> DISPATCHING: last predecessor for token k -> ALL CAS
 
-    DISPATCHING --> RUNNING: D++ at L1 TT slot / L2 ALL commit, then wake
-    RUNNING --> WAITING_DATA: process token k and forward the same token
+    DISPATCHING --> RUNNING: wake after D++ at L1 TT slot / L2 ALL commit
+    RUNNING --> WAITING_DATA: after processing token k, forward same token
 ```
 
-- The packed `ready_state` `ALL` CAS, layer-specific `dispatch_counter` update, and futex wake are performed inside the publication commit guard. Publication first proves a one-to-one mapping from every direct incoming edge to the Successor's `required_mask`: no two edges share a bit, the incoming OR-union equals the mask, and edge count equals `popcount(required_mask)`. Before changing runtime state, `signal_ready(k)` then validates and preflights the Source's complete outgoing-edge list: malformed metadata or any duplicate/stale destination leaves the entire fan-out unchanged. A bit already set for the same `(predecessor, k)` at preflight returns `EALREADY`, and a different token returns `ESTALE`. A concurrent identical commit observed during CAS is convergence, not a late failure. One 64-bit CAS resets a destination mask and increments its ready sequence/job token atomically.
-- `ALL` creates only the ready sequence. Timer Master increments `dispatch_counter` for an L1 Successor only at that Task's TT slot when pending exists. After all outgoing-edge CAS operations complete, an L2 Successor increments `dispatch_counter` in the `ALL` commit and wakes. This field is the sole Data-Driven futex word.
-- An L1 slot with no ready produces `0` wake. A late ready remains pending until the next TT slot; normal Phase 0 tests contain at most one pending ready.
-- After futex wake makes the Task Runnable, existing BPF logic performs actual execution: TT in its slot and CBS under budget/Gap rules.
-- A control wake without a dispatch increment, truncated/replaced mapping, writer-pending/ABI mismatch, or a gate with no pending ready does not lead to execution.
+- The packed `ready_state` `ALL` CAS, the per-layer `dispatch_counter` update, and the futex wake are performed inside the publication commit guard. At publication, first prove that each Successor's direct incoming edges map one-to-one to `required_mask`. Reject two edges that alias one bit, a required bit without a corresponding edge, or an edge bit outside the mask. Before any state change, `signal_ready(k)` validates and preflights the Source's complete outgoing-edge list, so if malformed metadata or one duplicate/stale destination is found before the first CAS, the entire fan-out remains unchanged. If the same `(predecessor, k)` is already set at preflight, return `EALREADY`; if it is another token, return `ESTALE`. If a concurrent identical commit gets ahead during CAS, treat it as convergence. A single 64-bit CAS atomically resets the destination mask and increments the ready sequence/job token.
+- The complete fan-out guarantees **preflight failure atomicity** only. If the Source process terminates after the first CAS, only part of a destination's bit may remain. Phase 0 classifies that chain run as failed/a test-assumption departure; crash transactions, rollback, and idempotent retry belong to Phase 2 recovery.
+- `ALL` creates only a ready sequence. For an L1 Successor, only when `Timer Master` updates `next_tt_start` at its own TT slot and then checks `pending` through its internal lightweight guard does it perform `update_current_slot()`, increment `dispatch_counter` by 1, and `FUTEX_WAKE` (then kernel BPF `ops.enqueue()` inserts `SCX_DSQ_LOCAL_ON` and performs `scx_bpf_kick_cpu`). An L2 Successor increments by 1 in an `ALL` commit after all outgoing-edge CAS operations are complete. Only `dispatch_counter` is a futex word.
+- If there is no `pending ready` at an L1 slot, omit both `update_current_slot()` and `FUTEX_WAKE` and do not actively overwrite `SLOT_NONE` (`wake 0`, zero kernel enqueue/kick operations). Ready that arrives after the slot remains pending until the next TT slot, and a normal Phase 0 test includes at most one pending item.
+- `ttsched_init()` preserves token `0` on attach during normal pre-publication startup (`g_attached_before_publish = 1`) by using cursor `0` upon entry into the first valid generation. For a late attach to already published SHM at `cur > 0`, it snapshots the current `dispatch_counter` as the attach cursor and does not replay past tokens. `ttsched_wait_data()` uses a read-only seqlock (`O_RDONLY` supported), observes dispatch after that cursor, and returns `job_token` sequentially in FIFO order (`g_last_dispatch_counter++`) without jumping to `current - 1U`.
+- The existing BPF path runs only after a futex wake makes the Task Runnable. L1 receives actual CPU dispatch at its TT slot, and L2 at the CBS budget/Gap gate.
+- A control wake accompanying publication, shutdown, or generation transition; invalidated/replaced SHM (`magic=0`/`instance_id` mismatch); or writer-pending/ABI mismatch is rejected with `ESTALE`. A spurious wake with no state change waits again with `0` executions, and a gate with no pending ready creates no wake.
 
 ### 3.4 H-DD-P0-04 — End-to-End (E2E) Execution Sequence
 
-#### (a) Normal Chain Sequence (Task Class Is Independently Selected as TT/CBS from the Input)
+#### (a) Normal Chain Sequence (Task Class Is Independently Selected as TT/CBS from Input)
 
 ```mermaid
 sequenceDiagram
@@ -121,26 +127,28 @@ sequenceDiagram
     participant A as TT/CBS adapter
     participant BPF as scx_timpani
 
-    Note over P: Source uses the existing L1 TimerMaster counter or L2 Event release
-    P->>SHM: publish token-k payload, then signal_ready(k)
-    SHM->>SHM: validate/preflight the complete outgoing-edge list
-    SHM->>SHM: reject a failed plan without mutation, or commit each predecessor bit
-    SHM->>SHM: on the last matching input, packed ALL CAS + ready_sequence++
-    alt D is an L1 TT Successor
-        A->>SHM: at its TT slot, check pending = modular_gt(R, D)
-        A->>SHM: if pending, dispatch_counter++
-        A->>D: futex dispatch wake
-    else D is an L2 CBS Successor
+    Note over P: L1 Timer Master or L2 event adapter (ttsched_release_source) stamps ordinal k in the Source slot before wake
+    Note over P: Even when app activation is delayed, Source acquires the stamped k through ttsched_current_job_token(&k)
+    Note over P: Publish the final result to the app-owned token-k payload store
+    P->>SHM: signal_ready(k)
+    SHM->>SHM: validate/preflight complete outgoing-edge list
+    SHM->>SHM: reject failed plan unchanged or commit each predecessor bit
+    SHM->>SHM: packed ALL CAS + ready_sequence++ on last matching input
+    alt D is L1 TT Successor
+        A->>SHM: at own TT slot, update next_tt_start then check pending = counter_ahead(R, D)
+        A->>SHM: if pending, update_current_slot + dispatch_counter++
+        A->>D: futex dispatch wake (kernel BPF ops.enqueue inserts SCX_DSQ_LOCAL_ON + kick)
+    else D is L2 CBS Successor
         SHM->>SHM: after all outgoing-edge CAS, dispatch_counter++
         SHM->>D: futex CBS release wake
     end
-    D->>D: wait_data returns token k and reads token-k payload
-    D->>BPF: Runnable, retain the original Task class
-    BPF-->>D: execute by TT slot or CBS budget/Gap
+    D->>D: wait_data (read-only seqlock, FIFO) returns token k and reads app payload for same token
+    D->>BPF: Runnable, preserve original Task class
+    BPF-->>D: execute according to TT slot or CBS budget/Gap
     D->>SHM: after processing, signal_ready(k) to the next Successor
 ```
 
-Even when the graph is the same, Task classes can differ. Phase 0 tests include TT→TT, TT→CBS, CBS→TT, and CBS→CBS connections.
+Even when the graph is the same, Task classes may differ. Phase 0 tests include TT→TT, TT→CBS, CBS→TT, and CBS→CBS connections.
 
 #### (b) Wait-State Retention Scenario for Partial Input and a Control Wake (`UC-DD-02`)
 
@@ -156,12 +164,12 @@ sequenceDiagram
 
     TM->>CAM: L1 Source slot or L2 Source release for token k
     CAM->>SHM: signal_ready(k) -> Successor ready_state mask = 0b01
-    Note over LIDAR: no signal_ready(k) from the other predecessor
-    Note over SHM,FUSION: ALL is not satisfied, so do not open the TT/CBS dispatch gate
+    Note over LIDAR: no signal_ready(k) from other predecessor
+    Note over SHM,FUSION: ALL is not satisfied, so do not open TT/CBS dispatch gate
     CAM->>SHM: duplicate signal_ready(k) -> EALREADY, mask remains 0b01
-    CAM->>SHM: future signal_ready(k+1) -> ESTALE, no state change
-    Note over SHM,FUSION: a control wake does not change the ready/dispatch sequence
-    Note over FUSION,PLAN: token-k ALL is incomplete -> execution count remains 0 regardless of class
+    CAM->>SHM: future signal_ready(k+1) -> ESTALE, state unchanged
+    Note over SHM,FUSION: a control wake does not change ready/dispatch sequence
+    Note over FUSION,PLAN: token-k ALL incomplete -> execution count remains 0 regardless of class
 ```
 
 ---
@@ -170,13 +178,14 @@ sequenceDiagram
 
 | Source to Inspect | Current-Code Observation and Difference Required by the Phase 0 Design |
 |:---|:---|
-| `timpani-o/src/global_scheduler.{h,cpp}` | A common candidate-validation/placement path is needed that separately generates the DAG and the Task's existing TT/CBS classification. |
-| `timpani-n/src/main.cpp` | Layer-specific entry registration and linkage to the common Pipeline DAG metadata are needed. |
-| `timpani-n/src/timer_master.{h,cpp}` | Connect L1 Task ready to the dispatch sequence in an allowed TT slot. |
-| `sample-apps/src/libttsched.{h,c}` | Add the common ready/dispatch sequences and `wait_data`/`signal_ready` *(subject to approval)*. |
-| `timpani-n/src/bpf/timpani.bpf.c` | Use the existing TT/CBS dispatch rules and allow only dispatches created by the L1/L2 adapters. |
+| `timpani-o/src/schedinfo_service.{h,cpp}` | Explicit-over-inherit resolution of `TaskInfo.temporal_class` and safe rollback of the existing workload model when candidate validation fails are required. |
+| `timpani-o/src/global_scheduler.{h,cpp}` | DAG validation and common metadata generation are required, as are `hyperperiod_us > 0` for CBS-only operation and `L1→L1` ordering by `(topo_rank, deadline_us, ...)` + `min_start` in `place_tt_slots()`. |
+| `timpani-n/src/main.cpp` | Per-TT/CBS-entry registration, rejection of `ExecutionModel.DATA_FLOW`, and `TimerMaster::set_schedule_table()` overloads to transmit CBS/Pipeline metadata are required. |
+| `timpani-n/src/timer_master.{h,cpp}` | `set_schedule_table()` overloads (preserving `CON-DD-06`), fixation of the single `base_cycle_start` and per-Task ordinal at `start()`, and, for an L1 Successor in an allowed slot, updating `next_tt_start`, checking `pending` under the lightweight guard, and only then performing `update_current_slot()`, `dispatch_counter++`, and `FUTEX_WAKE` are required (`pending == false` omits them and does not overwrite `SLOT_NONE`). |
+| `sample-apps/src/libttsched.{h,c}` | A `40B` extension header, RT no-VFS atomic validation, atomic name comparison, read-only seqlock, retention of `void ttsched_init()`, `g_shm_init_errno`, pre-/post-publication attach separation, `pipeline_commit_alive`, and addition of `release_source`/`current_job_token`/`wait_data`/`signal_ready` are required *(subject to approval)*. |
+| `timpani-n/src/bpf/timpani.bpf.c` | Reuse the existing `SCHED_TYPE_TT`/`CBS` dispatch rules unchanged (no Data-Ready awareness or separate Data-Driven DSQ). |
 
-The table above is the starting point for the design and does not signify actual code changes or completed approval.
+The table above is the design starting point and does not signify actual code changes or completed approval.
 
 ---
 
@@ -184,7 +193,7 @@ The table above is the starting point for the design and does not signify actual
 
 | HLD Area | Active SRS Requirements | Verification Scenarios |
 |:---|:---|:---|
-| **H-DD-P0-01** | `REQ-DD-P0-F-001`, `REQ-DD-P0-F-002`, `REQ-DD-P0-N-003` | `TC-DD-P0-001`, `TC-DD-P0-003`, `TC-DD-P0-005`, `TC-DD-P0-006` |
+| **H-DD-P0-01** | `REQ-DD-P0-F-001`, `REQ-DD-P0-F-002`, `REQ-DD-P0-N-003`, `REQ-DD-P0-N-004` | `TC-DD-P0-001`, `TC-DD-P0-003`, `TC-DD-P0-005`, `TC-DD-P0-006` |
 | **H-DD-P0-02** | `REQ-DD-P0-F-003`, `REQ-DD-P0-F-004`, `REQ-DD-P0-F-006`, `REQ-DD-P0-N-004` | `TC-DD-P0-003`, `TC-DD-P0-004`, `TC-DD-P0-005` |
-| **H-DD-P0-03** | `REQ-DD-P0-F-005`, `REQ-DD-P0-F-006`, `REQ-DD-P0-N-001`, `REQ-DD-P0-N-002` | `TC-DD-P0-001`, `TC-DD-P0-002`, `TC-DD-P0-004`, `TC-DD-P0-006` |
+| **H-DD-P0-03** | `REQ-DD-P0-F-005`, `REQ-DD-P0-F-006`, `REQ-DD-P0-N-001`, `REQ-DD-P0-N-002` | `TC-DD-P0-001`, `TC-DD-P0-002`, `TC-DD-P0-004`, `TC-DD-P0-005` |
 | **H-DD-P0-04** | `REQ-DD-P0-F-004`..`F-008`, `REQ-DD-P0-N-002` | `TC-DD-P0-001`, `TC-DD-P0-002`, `TC-DD-P0-004` |

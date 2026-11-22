@@ -9,8 +9,8 @@ SPDX-License-Identifier: MIT
 |:--|:--|
 | 목적 | Data-Driven Workload를 무엇에 쓰고, 어떻게 실행하며, 현재 어디까지 지원하는지 빠르게 설명한다 |
 | 독자 | 아키텍처, 스케줄러, 애플리케이션, 검증 담당자 |
-| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-20 현행화, 리뷰 `I-01`~`I-09`·`D-01`~`D-05` 반영)과 연계 문서 008·011 |
-| 상태 | **Draft — Phase 0 조건부 설계 승인** (`OI-DD-01` 인터페이스 승인, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님) |
+| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-22 설계 정합성 현행화)과 연계 문서 008·011 |
+| 상태 | **Draft — Phase 0 조건부 설계 승인** (`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님) |
 
 > **한 문장 요약:** 필요한 선행 작업이 모두 끝나면 후행 Task가 실행 후보가 된다. 실제 실행 시점은 Task가 원래 가진 TT 또는 CBS 규칙이 결정한다.
 
@@ -100,7 +100,7 @@ flowchart LR
 |:--|:--|
 | **Hyperperiod** | TT/L1 슬롯 패턴이 반복되는 주기 |
 | **Activation Window** | 특정 Task의 실행을 허용하는 시간 구간, Phase 1 이후 |
-| **적용 경계** | 런타임 테이블이 새 값으로 바뀌는 시점, [DDR-011](../DDR-011-runtime-table-update/DDR-011-runtime-table-update.md)(`REQ-011` 연계) |
+| **적용 경계** | 런타임 테이블이 새 값으로 바뀌는 시점, [DDR-011](DDR-011-runtime-table-update.md)(`REQ-011` 연계) |
 | **E2E deadline** | Source 완료부터 Sink 완료까지 허용되는 전체 지연 |
 
 `Data-Ready` 시점, Task 실행 구간, 테이블 적용 경계는 서로 다른 개념이다.
@@ -194,12 +194,12 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 
 ### 잘못된 깨움은 어떻게 막는가?
 
-- **같은 체인 주기의 `job_token` 취득 및 FIFO 소비:** release authority는 실제 활성화 시 Source slot에 공통 activation ordinal을 release-valid 표식과 함께 기록한 뒤 Task를 깨운다. L1/L2 Source는 활성화 직후 `ttsched_current_job_token()`으로 그 기록값을 취득하며, wall-clock이나 앱-local counter로 token을 다시 계산하지 않는다. `signal_ready(job_token)`은 활성 `ready_sequence`와 일치하는 신호만 수락한다(중복 token `EALREADY`, 낡은·미래 token `ESTALE`). `ttsched_init()`은 각 Successor의 현재 `dispatch_counter`를 attach cursor로 잡아 이전 token을 replay하지 않는다. 정상 Phase 0에서는 최초 dispatch 전에 초기화하므로 token `0`은 보존되고, `wait_data()`는 attach 이후 token만 FIFO 순차 소비해 이전·다음 주기 혼합과 하류 교착을 막는다.
+- **같은 체인 주기의 `job_token` 취득 및 FIFO 소비:** L1 Source는 `Timer Master`가, L2 CBS Source는 이벤트 어댑터/시험 생성기가 `ttsched_release_source()`를 통해 실제 활성화 직전에 파이프라인 주기 단위 activation ordinal을 Source slot에 release-valid 표식과 함께 기록한다. L1/L2 Source는 활성화 직후 `ttsched_current_job_token()`으로 그 기록값을 취득하며, wall-clock이나 앱-local counter로 token을 다시 계산하지 않는다. `signal_ready(job_token)`은 바인딩된 세대의 활성 `ready_sequence`와 일치하는 신호만 수락한다(중복 token `EALREADY`, 낡은·미래 token 및 세대 불일치 `ESTALE`). `ttsched_init()`은 게시 전 정상 기동 attach에서는 token `0`을 보존하고, 게시 후 `cur > 0` late attach에서는 현재 `dispatch_counter`를 cursor로 잡아 이전 token을 replay하지 않는다. `wait_data()`는 attach cursor 이후 token만 FIFO 순차 소비해 이전·다음 주기 혼합과 하류 교착을 막는다.
 - **유효한 연결 계획만 적용:** `TaskReference(workload_id, task_id)`(Phase 0 동일 workload 및 노드 내 유일 `1..15`바이트 ASCII `task_id` 한정, 중복 선행 선언 거절) 및 incoming-edge/`required_mask` 1:1 대응(bijection)을 위반하거나 누락·중복된 선행 연결이 있는 계획은 실행 전에 거절한다.
 - **검증 실패의 부분 전달 방지:** 하나의 완료 신호가 여러 후행 Task로 전달될 때 첫 상태 변경 전에 전체 outgoing-edge를 preflight 검증하므로, 유효하지 않은 연결이나 실패 destination이 있으면 일부만 전달된 상태를 남기지 않는다. 이 원자성은 첫 CAS 이전 validation 실패에 한정되며, CAS 도중 Source crash의 rollback/retry는 Phase 0가 보장하지 않는다.
-- **게시 직렬화 및 무-VFS RT 원자 검증:** 쓰기 경로(`signal_ready`, `Timer Master`)는 `publication_guard`(`5 ms` 정상 drain / `50 ms` 종료 Safe Abandonment)로 테이블 게시와 직렬화하고, 읽기 전용 소비자(`wait_data`, `current_job_token`)는 `publication_guard`에 쓰지 않는 읽기 전용 seqlock으로 `O_RDONLY` 매핑을 보호한다. `fstat()` 크기 확인은 비RT `ttsched_init()`에서만 수행하며 RT 경로는 VFS 시스템 콜 없이 `magic`/`generation`/`instance_id` 원자 로드로만 교체·무효화를 탐지한다.
-- **Safe Abandonment의 의미:** 50 ms drain 초과 후에는 구 SHM object를 무효화하고 새 `instance_id` object로 교체한다. Safe Abandonment는 이미 멈춘 writer나 이미 token을 받아 실행 중인 Job을 강제 취소하지 않지만, CAS/wake 직전 재검증과 old-object isolation으로 late operation이 새 generation 실행으로 소비되지 않게 한다. 구 mapping consumer는 `ESTALE`을 반환한다.
-- **제어 신호를 데이터 완료로 오인하지 않음:** `dispatch_counter` 증가가 없는 테이블 게시·종료 같은 제어 알림으로는 Task를 실행하지 않으며(`ESTALE`), L1 TT Successor도 `pending ready`가 없으면 `current_slot_map`을 활성화하지 않는다.
+- **게시 직렬화 및 무-VFS RT 원자 검증:** 쓰기 경로(`signal_ready`, `release_source`, `Timer Master`)는 `publication_guard`(`min(5 ms, H/4)` 정상 drain / `50 ms` 종료 Safe Abandonment)로 테이블 게시와 직렬화하며, 이미 진입한 writer는 정상 `WRITER_PENDING` drain 중 commit+wake를 완결하고 강제 무효화(`magic=0`)/세대·객체 변경 시에만 중단한다. 읽기 전용 소비자(`wait_data`, `current_job_token`)는 `publication_guard`에 쓰지 않는 읽기 전용 seqlock과 원자 이름 비교로 `O_RDONLY` 매핑을 보호한다. `fstat()` 크기 확인은 비RT `ttsched_init()`에서만 수행하며 RT 경로는 VFS 시스템 콜 없이 `magic`/`generation`/`instance_id` 원자 로드로만 교체·무효화를 탐지한다.
+- **Safe Abandonment의 의미:** 50 ms drain 초과 후에는 구 SHM object를 무효화하고 새 `instance_id` object로 교체한다. Safe Abandonment는 이미 멈춘 writer나 이미 token을 받아 실행 중인 Job을 강제 취소하지 않지만, CAS/wake 직전 무효화 재검증과 old-object isolation으로 late operation이 새 generation 실행으로 소비되지 않게 한다. 구 mapping consumer는 `ESTALE`을 반환한다.
+- **제어 신호를 데이터 완료로 오인하지 않음:** 게시·종료·세대 전환이 동반된 제어 알림은 `ESTALE`을 반환하고, 상태 변화 없는 spurious wake는 실행 `0`회로 재대기한다. L1 TT Successor도 `pending ready`가 없으면 `update_current_slot()`과 `FUTEX_WAKE`를 생략해 커널 enqueue/kick을 유발하지 않는다.
 - **SHM writer 신뢰 경계:** `O_RDWR`는 특정 pipeline slot이 아니라 전체 `/timpani_ttsched` object 쓰기 권한이다. Phase 0 writer group에는 상호 신뢰된 cooperative Task만 넣고, 비신뢰 Task는 RO만 사용한다. 악의적 writer에 대한 slot/header integrity는 POSIX ACL 계약에 포함되지 않는다.
 - **기존 실행 조건 유지:** `Data-Ready`만으로 L1의 예약 시각이나 L2의 예산 규칙을 우회하지 않는다.
 
@@ -252,7 +252,7 @@ Data-Driven 실행은 다음 네 단계로 이어진다.
 | **시험 형태** | 단일 노드·고정 테이블·명확한 주기 조건에서 기본 체인 연속 구동 |
 | **실행 계층** | Task는 원래 L1 TT 또는 L2 CBS 계층을 유지하며, `ALL`은 각 계층의 실행 허가만 추가한다 |
 | **아직 보장하지 않음** | `Activation Window`, 정량 `E2E`, Pipeline 포함 런타임 갱신, 장애 복구·Fallback |
-| **연계 기준** | [DDR-011](../DDR-011-runtime-table-update/DDR-011-runtime-table-update.md)(`REQ-011` 연계)의 게시 안정성·제어 wake 구분을 따라 일반 TT 갱신 회귀를 막는다 |
+| **연계 기준** | [DDR-011](DDR-011-runtime-table-update.md)(`REQ-011` 연계)의 게시 안정성·제어 wake 구분을 따라 일반 TT 갱신 회귀를 막는다 |
 
 Phase 0 완료는 기본 Data-Driven 체인이 동작함을 뜻하며, 기능안전·Fail-Safe 운용 승인이나 모든 실시간 보장을 뜻하지 않는다.
 
@@ -309,9 +309,9 @@ Phase 0 합격 여부는 다음 네 가지로 판단한다.
 
 | 결정 | Phase 0 상태 / 후속 검토 질문 |
 |:--|:--|
-| **Pipeline 선언 형식 (`OI-DD-01`)** | **인터페이스 승인** — `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`(노드 내 유일 `1..15`B ASCII `task_id`, 중복 선행 거절), `(workload_id_hash, task_id_hash)` 공통 메타 |
-| **공유 메모리/API (`OI-DD-02`)** | **조건부 승인** — 784B prefix 뒤 `40B` extension header(`instance_id`/`origin_epoch_ns`/`hyperperiod_us`)·`pipeline[]`, release authority가 stamp한 Source activation token을 읽는 `ttsched_current_job_token()`·읽기 전용 seqlock `wait_data()`(FIFO)·`signal_ready()`, 비RT `fstat()` + RT 무-VFS 원자 검증, `publication_guard`(`5 ms`/`50 ms` Safe Abandonment와 old-object late operation isolation), DAC/POSIX ACL 및 trusted-writer group 검증 조건 |
-| **TT/CBS 실행 연결 (`OI-DD-03`)** | **조건부 승인** — L1 TT slot 선행 `pending` 확인 후 `current_slot_map`/`dispatch_counter` gate(`pending == false` 시 `SLOT_NONE` 유지), L2 `ALL` fan-out commit 후 CBS budget/Gap gate, 혼합 조합·부분 입력·prevalidation 시험 통과 조건 |
+| **Pipeline 선언 형식 (`OI-DD-01`)** | **구조 승인 (필드 번호 008 공통 레지스트리 정합 확정 조건부)** — `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`(노드 내 유일 `1..15`B ASCII `task_id` ↔ `TaskInfo.name`, 중복 선행 거절), `(workload_id_hash, task_id_hash)` 공통 메타, `ExecutionModel.DATA_FLOW` Phase 0 미사용/거절 |
+| **공유 메모리/API (`OI-DD-02`)** | **조건부 승인** — 784B prefix 뒤 `40B` extension header(`instance_id`/`origin_epoch_ns`/`hyperperiod_us`)·`pipeline[]`, L1 `Timer Master`/L2 `ttsched_release_source()`가 stamp한 Source activation token을 읽는 `ttsched_current_job_token()`·읽기 전용 seqlock `wait_data()`(원자 이름 비교·FIFO·spurious wake 안전)·`signal_ready()`(in-flight `pipeline_commit_alive`·세대 불일치 `ESTALE`), `void ttsched_init()` 유지·`g_shm_init_errno`·게시 전/후 attach cursor 분리, 비RT `fstat()` + RT 무-VFS 원자 검증, `publication_guard`(`min(5 ms, H/4)`/`50 ms` Safe Abandonment), DAC/POSIX ACL 및 trusted-writer group 검증 조건 |
+| **TT/CBS 실행 연결 (`OI-DD-03`)** | **조건부 승인** — L1 TT slot 선행 `pending` 확인 후 `update_current_slot()`·`dispatch_counter++`·`FUTEX_WAKE` (`pending == false` 시 모두 생략·`SLOT_NONE` 덮어쓰기 금지, 커널 BPF `ops.enqueue()`가 kick 담당), L2 `ALL` fan-out commit 후 CBS budget/Gap gate, 혼합 조합·부분 입력·prevalidation 시험 통과 조건 |
 | **후속 시간·복구 계약 (`OI-DD-04`~`08`)** | **Phase 1/2 미결** — 혼합 DAG `E2E`, `Activation Window`, Pipeline 갱신, `SKIP`·`DATA_TIMEOUT`·Fallback·재시작 복구 기준 |
 
 Phase 0에서는 **Task 클래스 변경 없이 L1/L2 혼합 기본 체인이 동작함**까지 확인한다. 위 표의 조건부 승인 항목(`OI-DD-02`, `OI-DD-03`)은 지정된 검증 시험 통과 전까지 구현 병합을 보류하며, 후속 단계 프로토콜·SHM·공개 API 변경은 Project Leader 승인 후 적용한다.
@@ -327,7 +327,7 @@ Phase 0에서는 **Task 클래스 변경 없이 L1/L2 혼합 기본 체인이 �
 | [DDR-009](DDR-009-data-driven-workload.md) | 설계 결정과 그 이유를 확인할 때 |
 | [HLD-009](HLD-009-data-driven-workload.md) | O, N, 앱의 책임과 전체 흐름을 확인할 때 |
 | [LLD-009](LLD-009-data-driven-workload.md) | 구조, 상태, 알고리즘과 구현 순서를 확인할 때 |
-| [OVERVIEW-008](../DDR-008-event-driven-workload/OVERVIEW-008-event-driven-workload-support.md) | Event-Driven 모델과의 경계를 비교할 때 |
-| [REQ-011](../DDR-011-runtime-table-update/REQ-011-runtime-table-update.md) / [DDR-011](../DDR-011-runtime-table-update/DDR-011-runtime-table-update.md) | runtime table update와 생명주기 제약을 비교할 때 |
+| [OVERVIEW-008](OVERVIEW-008-event-driven-workload-support.md) | Event-Driven 모델과의 경계를 비교할 때 |
+| [REQ-011](REQ-011-runtime-table-update.md) / [DDR-011](DDR-011-runtime-table-update.md) | runtime table update와 생명주기 제약을 비교할 때 |
 
 **권장 읽기 순서:** Overview → REQ → DDR → HLD → SRS → LLD. 008과 011은 공통 SHM, runtime update, 종료 계약을 다룰 때 함께 확인한다.
