@@ -362,8 +362,8 @@ sequenceDiagram
   participant RP as Replenisher userspace SCHED_FIFO
   participant KP as timpani_replenish_kick BPF syscall prog
   participant CPU as assigned CPU
-  BPF->>BPF: stopping: rem reaches 0, BUDGET_EXCEED once per episode, replenish_at (window end) unchanged
-  BPF->>BPF: enqueue to DSQ_THROTTLED of cpu, ordered by replenish_at
+  BPF->>BPF: stopping: rem reaches 0 while the task is still runnable, replenish_at (window end) unchanged
+  BPF->>BPF: enqueue to DSQ_THROTTLED of cpu, ordered by replenish_at, BUDGET_EXCEED once per episode
   Note over CPU: idle, no other activity (dispatch does not run by itself)
   RP->>RP: sleep until next check (window end, or 1 ms retry while a due server is not yet promoted)
   RP->>KP: bpf_prog_test_run with cbs_key and cpu
@@ -958,7 +958,7 @@ FCW 예제는 §8.3의 "미들웨어 메시지 콜백" 행이다. 아래는 §8.
 
 | 실행 | 기대 | 수용 기준 |
 |:--|:--|:--|
-| 옵션 없음(정상) | MIT를 측정으로 확정한 뒤 폴트 0건이다(시작값 18 ms에서 MIT_VIOLATION이 나오면 MIT가 낙관적이므로 (§8.2의 MIT 산정 기준대로 줄인다). Job 기록 수 = 경보 수. 각 Job은 wait 한 번과 done 한 번이다. 모든 Job에서 $t_{end} - t_{arr} \le 5$ ms이고 `missed` 없음. 정지 뒤 `accepted = completed`, `overflow` 0. `budget_used_us`는 C보다 작다. `tt_task`의 지터는 L2 없이 돌렸을 때와 같다 | AC-008-01, 02, 05, 13 |
+| 옵션 없음(정상) | MIT를 측정으로 확정한 뒤 폴트 0건이다(시작값 18 ms에서 MIT_VIOLATION이 나오면 MIT가 낙관적이므로 (§8.2의 MIT 산정 기준대로 줄인다). Job 기록 수 = 경보 수. 각 Job은 wait 한 번과 done 한 번이다. 모든 Job에서 $t_{end} - t_{arr} \le 5$ ms이고 `missed` 없음. 정지 뒤 `accepted = completed`, `overflow` 0. `budget_used_us`는 C 이하다. `tt_task`의 지터는 L2 없이 돌렸을 때와 같다 | AC-008-01, 02, 05, 13 |
 | `fcw_consumer -be [N]`(N번째 Event의 Job이 3 ms 사용, 예산 2 ms, 윈도우 18 ms) | 그 Job에서 BUDGET_EXCEED 1회. 0~2 ms에 예산을 다 쓰고 스로틀된다. 18 ms 승격 때 새 예산 2 ms로 나머지 1 ms를 쓰고 19 ms에 완료된다. 5 ms에 DeadlineMonitor가 **완료 전에** 마감 경과를 감지해 DMISS(THROTTLED)를 낸다. 완료 기록은 $t_{end}$ = 19 ms이고 `missed`는 한 번만 센다. 다음 Event(20 ms 도달)는 열린 윈도우 [18, 36)의 남은 1 ms를 CARRYOVER로 쓴다. 다음 실제 수면까지의 차감 수요 c가 1 ms를 넘으면 추가 실행 전에 스로틀되어 36 ms까지 기다리므로 예시 마감을 놓친다(THROTTLED, CARRYOVER). c가 1 ms 이하이고 소진 시 워커가 잠들면 이월 예산 때문에 스로틀되지 않는다. 마감 충족은 별도로 판정한다. c는 정상 구동의 `budget_used_us`로 확인한다. `tt_task`는 영향 없음 | AC-008-03, 14 |
 | `fcw_consumer --overrun-ms 10`(모든 Job이 10 ms 사용) | 모든 Job이 예산을 넘는다. 스로틀 에피소드마다 BUDGET_EXCEED, Job마다 DMISS이며 감지는 큐 대기 중(NOT_STARTED) 또는 실행·스로틀 중(THROTTLED)이다. 서버는 18 ms마다 2 ms만 쓰므로 Job 하나에 여러 윈도우가 필요하고, 도달(20 ms)은 그보다 빨리 쌓인다. 공통 큐가 QDEPTH(후보 8)에 차면 E_FULL이 나고 앱이 버린다(`overflow`와 앱 통계). 수락된 Event는 처리되거나 마감 실패로 기록되며 조용히 사라지지 않는다. `tt_task`는 영향 없음 | AC-008-04, 15 |
 | `mock_radar_producer --burst-ms 6`(도달 간격 6 ms, MIT 18 ms) | 간격이 MIT보다 짧은 도달마다 `mit_viol`이 오르고, FaultMonitor가 $T_s$ 윈도우마다 MIT_VIOLATION을 개수와 함께 낸다. 서버는 18 ms마다 2 ms만 쓰므로 Job이 밀리고, 그 DMISS에는 MIT_RELATED가 붙는다. 버스트가 끝나면 큐가 비고 수락 관계식이 성립한다. 이 모드는 TIMPANI의 TT 깨움 대신 로컬 타이머를 쓰므로 L1 보호를 보는 시험이 아니다. MIT 경로만 본다 | AC-008-07 |

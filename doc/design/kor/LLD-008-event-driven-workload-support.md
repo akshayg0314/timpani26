@@ -491,7 +491,7 @@ static schedinfo::v1::FaultType map_fault_type(node::v1::FaultType t) {
 #define CBS_ACT_TOL_US  50u   /* tolerance of replenishment window rule 1 only (D-04). Candidate 50 µs = L_post (bound under the reference producer configuration, A-10), to be measured.
                                  It is no longer shared with an MIT check nor tied to L_wake_max */
 #define PROMOTE_BUDGET  16    /* promotion scan bound = MAX_L2_PER_CPU (timpani-o admission) */
-#define JOB_FLAG_THROTTLED     (1u << 1)   /* the server was throttled during this interval (enqueue / stopping) */
+#define JOB_FLAG_THROTTLED     (1u << 1)   /* the server was throttled during this interval (enqueue) */
 #define JOB_FLAG_CARRYOVER     (1u << 6)   /* interval started without a fresh budget (window not ended at activation, D-04 rule 1) */
 #define JOB_FLAG_TASK_EXIT     (1u << 5)   /* JobRecord only: exit_task record */
 
@@ -549,7 +549,7 @@ struct FaultEvent {
     __u8  fault_type;
     __u8  _pad[3];
     __u64 expected_deadline_ns;   /* TT DMISS: abs deadline; BUDGET_EXCEED: replenish_at (window end) */
-    __u64 actual_completion_ns;   /* TT DMISS: t_done; BUDGET_EXCEED: stop time */
+    __u64 actual_completion_ns;   /* TT DMISS: t_done; BUDGET_EXCEED: throttle entry time (enqueue) */
     __u32 run_seq;                /* interval the event belongs to (was job_seq) */
     __u32 flags;                  /* JOB_FLAG_* of that interval */
     __u64 activation_ns;          /* t_act of that interval */
@@ -836,7 +836,7 @@ void BPF_PROG(stopping, struct task_struct *p, bool runnable)
         if (c) {
             m->budget_used_us += cbs_charge(c, now);
             if (runnable && c->remaining_us == 0)
-                p->scx.slice = 0;  /* avoid the local DSQ head on preemption */
+                p->scx.slice = 0;  /* budget is 0 and the task is still runnable: expire the slice so it goes through enqueue (throttle), not back to the local DSQ head */
         }
         return;
     }
@@ -890,7 +890,7 @@ struct sched_ext_ops timpani_ops = {
 
 - `emit_job_record(m, now, extra_flags)`는 `JobRecord{workload_id_hash, task_id_hash, bind_gen = m->bind_gen, run_seq = m->run_seq, cpu, budget_used_us, t_act_ns = m->activation_ns, t_start_ns = m->t_start_ns, t_sleep_ns = now, flags = m->job_flags | extra_flags}`를 `job_trace_rb`에 제출한다. 실패는 기록 손실로만 보고한다(FR-B-023).
 - `emit_fault()`는 `FaultEvent.run_seq`, `activation_ns`, `flags`를 `m` 기준으로 채우며, `bpf_ringbuf_reserve` 실패 시 `fault_drop_count++`(FR-B-023)다.
-- `runnable`(TT 및 L2 DMISS 판정 제거 뒤의 인자)은 `stopping`에서 쓰지 않는다. struct_ops 시그니처를 맞추기 위해 인자는 남긴다.
+- `stopping`의 `runnable` 인자는 L2 경로에서만 쓴다. 잔여 예산이 0이고 태스크가 실행 가능하면 슬라이스를 0으로 만들어, `SCX_OPS_ENQ_LAST`와 함께 enqueue를 거치게 한다(위 "단독 runnable 경로", 타깃 미검증). TT 경로는 이 인자를 쓰지 않는다.
 
 ### 4.5 검증기(verifier)·호환 메모
 - `ops.runnable`/`ops.quiescent`/`ops.exit_task`는 sched_ext 6.12 struct_ops 멤버로 존재한다. `SCX_DEQ_SLEEP`은 vmlinux.h enum.
@@ -902,7 +902,7 @@ struct sched_ext_ops timpani_ops = {
 - `job_fsm.h`는 `__always_inline`·고정폭 타입만 사용하며 `bpf_helpers.h` 미포함 → 호스트 컴파일 가능.
 - 실행 구간의 한계(REQ-008 §2, DDR-008 D-02): 미소비 Event가 있어 `ttsched_evt_wait()`가 수면 없이 복귀하면(R3) `quiescent`가 호출되지 않으므로 두 연속 Job은 **하나의 실행 구간**으로 관측된다. BPF는 Job 경계를 알 수 없다. Job 경계는 워커가 `wait`/`done`으로 알리며 SHM Job 로그에 기록된다(§5.4(a), §5.6). 실행 구간 레코드와 Job 기록은 `t_arr`·`t_begin`·`t_end` 기준으로 시각만 대응시킨다(DDR-008 D-16). 대응은 Job이 블로킹하지 않을 때 1:1이다.
 - 연속 Job의 예산: 두 번째 Job이 같은 실행 구간 안에서 시작하면 새 예산을 받지 않는다(D-04 규칙 4). 구간이 끝나기 전 남은 예산을 함께 쓴다. 그 결과 뒤의 Job이 스로틀되거나 마감을 놓칠 수 있다. 이는 방지가 아니라 보고한다.
-- 예산 차감은 `running`~`stopping`의 on-CPU 시간을 ns로 누산해 µs로 반영한다. 잔여 예산은 0에서 포화하며 대기 진입 비용도 차감한다. 정확히 소진하고 잠들면 차감만 한다. 계속 runnable이거나 활성화 보충을 적용한 깨움에도 잔여 예산이 0이면 enqueue에서 추가 실행을 차단한다. `replenish_at_ns`는 기존 윈도우 끝을 유지하며 보고와 계수는 실제 스로틀 진입당 한 번이다.
+- 예산 차감은 `running`~`stopping`의 on-CPU 시간을 ns로 누산해 µs로 반영한다. 잔여 예산은 0에서 포화하며 대기 진입 비용도 차감한다. 정확히 소진하고 잠들면 차감만 한다. 잔여 예산이 0인 채 태스크가 계속 실행 가능하면 enqueue에서 추가 실행을 차단한다. 잠든 뒤 깨어날 때 활성화 보충 조건(`t_act + CBS_ACT_TOL_US ≥ replenish_at_ns`, DDR-008 D-04 규칙 1)을 만족하지 못하면 보충이 없으므로 enqueue에서 스로틀하고 BUDGET_EXCEED를 한 번 낸다. 조건을 만족하면 활성화 보충을 받으므로 스로틀하지 않는다. `replenish_at_ns`는 기존 윈도우 끝을 유지하며 보고와 계수는 실제 스로틀 진입당 한 번이다.
 - 위반 후 동작(윈도우 용어): 윈도우가 끝나기 전에 활성화된 실행 구간은 `JOB_FLAG_CARRYOVER`를 갖고 남은 예산으로 실행된다. 도달이 MIT보다 가까웠거나 Job이 마감을 넘긴 경우가 여기에 해당한다. 서버가 도달 위상으로 돌아오는 과정은 DDR-008 D-04 "위반 후 동작"을 따른다. 그 예시는 윈도우 타임라인으로 기술한다(§5.8).
 - 블로킹 Job: Job 중 블로킹하면 잠듦으로 실행 구간이 나뉜다. 블로킹 뒤의 깨움은 커널 활성화이며 열린 윈도우 안에 있으면 예산을 새로 주지 않는다(`cbs_on_activation`, 단 CARRYOVER로 표시). 블로킹 Job의 나뉜 구간은 Job 경계가 아니다. Job 경계는 SHM Job 로그가 전달한다. 수용 판정은 블로킹 Job에 보장을 주지 않는다(§3.3 가정 4).
 

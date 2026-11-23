@@ -110,8 +110,9 @@ REQ-008 §1.3/§10이 정리한 바와 같이, `timpani26`에는 L2(CBS) 경로�
 SLEEP  --(ops.runnable: 수면에서 깨어남)--> ACTIVE
           · t_act = now, run_seq++, 보충 윈도우 검사(D-04 규칙 1), 활성화 기록 1회
 ACTIVE --(ops.enqueue: 선점·슬라이스 만료 후 재삽입)--> ACTIVE (t_act 불변)
+          · 잔여 예산이 0이면 Throttled 큐에 넣는다. 이 진입이 스로틀 에피소드의 시작이며 BUDGET_EXCEED를 1회 낸다(D-10)
 ACTIVE --(ops.stopping: 실행 중단)--> ACTIVE
-          · 예산 차감. 실제 스로틀 에피소드 진입에서 BUDGET_EXCEED 1회(D-10)
+          · 예산 차감. 여기서는 BUDGET_EXCEED를 내지 않는다
 ACTIVE --(ops.quiescent: SCX_DEQ_SLEEP, 자발적 수면)--> SLEEP
           · 실행 구간 레코드 발행 (run_seq, t_act, t_start, t_sleep, budget_used_us, flags)
 ```
@@ -341,7 +342,7 @@ P2에서 키를 절대 마감으로 바꿔 **EDF**로 전환하고, 수용식을
 3. source의 도달이 MIT를 지킨다.
 4. Job이 블로킹하지 않는다. 블로킹하는 source는 마감이 감시되지만(D-20) 수용 판정은 그 마감을 보장하지 않는다.
 5. 어댑터는 도달 시점에 게시한다. 주어진 과거 $t_{arr}$은 D의 일부를 소비한다.
-6. 활성화부터 실제 수면까지의 차감 실행 시간은 선언 예산 $C_i$ 이하이다. 실행 시간 산포에 대비한 예산 여유를 권고한다.
+6. 활성화부터 실제 수면까지(대기 진입 비용 포함)의 차감 실행 시간은 선언 예산 $C_i$ 이하이다. 실행 시간 산포에 대비한 예산 여유를 권고한다.
 7. 각 Job은 다음 도달 전에 워커가 잠들 만큼 빨리 끝난다(D-04 (P-a) 경계 조건).
 8. $tol$이 측정된 활성화 지터를 덮는다.
 
