@@ -6,8 +6,10 @@ SPDX-License-Identifier: MIT
 # HLD-009: Data-Driven Workload — Phase 0 상위 레벨 아키텍처 설계
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-22 (Phase 0 설계 정합성 현행화)  
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부, `OI-DD-02`/`OI-DD-03` 조건부 승인; 현재 구현의 충족 선언 아님)  
+**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
+필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 현재
+구현의 충족 선언 아님)
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)  
 **결정/상세:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 

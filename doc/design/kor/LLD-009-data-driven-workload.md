@@ -6,8 +6,10 @@ SPDX-License-Identifier: MIT
 # LLD-009: Data-Driven Workload — Phase 0 상세 설계
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-22 (Phase 0 설계 정합성 현행화)  
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님)  
+**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
+필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료
+아님)
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §6, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md)  
 **설계 결정:** [DDR-009](DDR-009-data-driven-workload.md) `D-DD-P0-01`..`05`, [DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`, `D-P0-06`
 
@@ -19,7 +21,7 @@ SPDX-License-Identifier: MIT
 
 | 기존 접점 | Phase 0 상세 설계 의도 | 승인·호환 제약 |
 |:---|:---|:---|
-| `timpani-o/proto/*.proto` | `optional` Task class override(`protoc >= 3.15`), 구조화 `TaskReference`(`task_id` ↔ `TaskInfo.name`), workload/task hash 쌍 공통 DAG metadata(`ExecutionModel.DATA_FLOW = 2` 미사용) | **`OI-DD-01` 구조 승인 (필드 번호 008 정합 확정 조건부)** |
+| `timpani-o/proto/*.proto` | `optional` Task class override(`protoc >= 3.15`), 구조화 `TaskReference`(`task_id` ↔ `TaskInfo.name`), workload/task hash 쌍 공통 DAG metadata(`ExecutionModel.DATA_FLOW = 2` 미사용) | **`OI-DD-01` 구조 승인(008 배정 `11/12/13` 정합 완료)** |
 | `sample-apps/src/libttsched.h/c` | versioned Pipeline extension(`40B` 헤더), packed `ready_state`, dispatch-only futex, `void ttsched_init()` 유지·`g_shm_init_errno`·TLS 일괄 리셋·게시 전/후 attach 분리(`g_attached_before_publish`), `release_source`/`current_job_token`/`wait_data`/`signal_ready`, `pipeline_commit_alive`, `atomic_name_equals`, 읽기 전용 seqlock 및 무-VFS RT 검증 | **`OI-DD-02` 조건부 승인** |
 | `timpani-o/src/schedinfo_service.{h,cpp}` | `TaskInfo.temporal_class` explicit-over-inherit 해석, `RegenerateAllSchedules()` 실패 시 기존 워크로드 모델 안전 롤백 | 기존 API 보존 |
 | `timpani-o/src/global_scheduler.*` | DAG 검증, CBS-only `hyperperiod_us > 0` 보장, `place_tt_slots()`의 `(topo_rank, deadline_us, ...)` + `min_start` L1→L1 순서 보장 및 graph meta 분리 생성 | 기존 API 보존 |
@@ -1220,9 +1222,13 @@ Phase 0 L1 slot에 ready가 늦게 도착하면 해당 slot에서는 `update_cur
 
 ---
 
-## 6. Protobuf 인터페이스 최소 확장안 (`OI-DD-01`, 구조 승인 — 필드 번호 008 공통 레지스트리 정합 확정 조건부)
+## 6. Protobuf 인터페이스 확장안 (`OI-DD-01`, 008 필드 배정 정합 완료)
 
-> **주의**: 메시지 구조는 승인되었으나 `TaskInfo` 필드 번호(`11`, `12` 등)는 008 문서군과 공유하는 공통 레지스트리 정합 확정 후 실제 `.proto` 파일에 반영한다(`CON-DD-05`). `proto3 optional` 사용을 위해 빌드 환경은 **`protoc >= 3.15`** 를 요구한다.
+> **주의**: 008이 정한 `min_inter_arrival_us = 11`,
+> `temporal_class = 12`, `predecessors = 13` 배정을 보존한다. 이 안은
+> `CON-DD-05`에 따른 Project Leader 승인 전 실제 `.proto`에 반영하지
+> 않는다. `proto3 optional` 사용을 위해 빌드 환경은
+> **`protoc >= 3.15`** 를 요구한다.
 
 ```protobuf
 // timpani-o/proto/schedinfo.proto (package schedinfo.v1)
@@ -1235,9 +1241,12 @@ message TaskReference {
 
 message TaskInfo {
   // ... existing fields 1..10 (field 1: string name) ...
+  // 008 Event-Driven 확장이 사용하는 field 11.
+  uint32 min_inter_arrival_us = 11;
+  // 008이 Task 단위 override용으로 예약한 field 12.
   // If absent, inherit SchedInfo.temporal_class.
-  optional TemporalClass temporal_class = 11;
-  repeated TaskReference predecessors = 12;
+  optional TemporalClass temporal_class = 12;
+  repeated TaskReference predecessors = 13;
 }
 
 // timpani-o/proto/node_control.proto (package timpani.node.v1)
@@ -1262,7 +1271,22 @@ message HierarchicalScheduleTable {
 }
 ```
 
-권고 field 번호 `11`, `12`, `6`은 현재 schema의 빈 번호를 예시로 표기한 것이며 실제 `.proto` 반영 전 008 문서군과 공통 레지스트리에서 최종 확정한다. `TaskReference.task_id`는 `TaskInfo.name`(field 1)과 1:1 정확 일치로 해석된다. `SchedInfo.temporal_class`는 기존 workload 기본값으로 유지한다. O는 `TaskInfo.temporal_class`의 presence를 확인해야 하므로 단순 enum 대신 `proto3 optional`(`protoc >= 3.15`)을 사용한다. Phase 0에서 trigger enum의 유효값은 `PIPELINE_TRIGGER_ALL`뿐이며, `node_control.proto`에 기존 정의된 `ExecutionModel.DATA_FLOW = 2`는 와이어 호환 보존을 위해 enum에 유지하되 Phase 0에서는 미사용(O 미발행, N 수신 시 `EINVAL` 거절)으로 고정한다.
+`TaskInfo` 필드 배정은 `11`/`12`/`13`으로 고정한다. field 11은 008의
+`min_inter_arrival_us`, field 12는 008이 같은 `temporal_class` 의미로
+예약한 위치, field 13은 `predecessors`로 사용한다.
+`HierarchicalScheduleTable.pipeline_tasks = 6` 배정은 유지한다. 이 정합은
+wire 번호 충돌을 해소하며 Task 단위 class override의 Phase 0 도입 승인이나 실제
+schema 반영 승인을 뜻하지 않는다.
+
+`TaskReference.task_id`는 `TaskInfo.name`(field 1)과 1:1 정확 일치로
+해석한다. `SchedInfo.temporal_class`는 기존 workload 기본값으로 유지한다.
+O는 `TaskInfo.temporal_class`의 presence를 확인해야 하므로 단순 enum
+대신 `proto3 optional`(`protoc >= 3.15`)을 사용한다.
+
+Phase 0에서 trigger enum의 유효값은 `PIPELINE_TRIGGER_ALL`뿐이다.
+`node_control.proto`에 기존 정의된 `ExecutionModel.DATA_FLOW = 2`는 wire
+호환을 위해 enum에 유지하되 Phase 0에서는 미사용한다(O 미발행, N 수신 시
+`EINVAL` 거절).
 
 TT/CBS entry 자체에는 dependency를 중복하지 않는다. O→N DAG metadata는 `PipelineTaskConfig`에만 두고, N은 key 쌍을 `TtSlot` 또는 `CbsConfig` 중 정확히 하나와 연결한다. node-level SHM 이름 조회는 `REQ-DD-001` 및 `ASM-DD-01`의 `1..15`바이트 ASCII `task_id` 노드 유일성 제약을 Phase 0에도 유지한다.
 

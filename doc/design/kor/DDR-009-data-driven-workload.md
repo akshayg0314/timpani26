@@ -6,8 +6,10 @@ SPDX-License-Identifier: MIT
 # DDR-009: Data-Driven Workload — Phase 0 설계 결정 기록
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-22 (Phase 0 설계 정합성 현행화)  
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님)  
+**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
+필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료
+아님)
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §9, [SRS-009](SRS-009-data-driven-workload.md)  
 **연계 설계:** [HLD-009](HLD-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -133,7 +135,8 @@ flowchart LR
 - **Phase 1**: `Activation Window`, Harmonic 주기, L1/L2 혼합 DAG `E2E` 분석, 정상 갱신, SHM 버전 관리.
 - **Phase 2**: `SKIP`, 최초 원인 `DATA_TIMEOUT`, Sink Fallback, 계층 공통 복구 상태 초기화.
 - **Phase 0 검토 게이트**:
-  1. `OI-DD-01`(구조 승인 완료; 필드 번호 008 공통 레지스트리 정합 확정) 및 `OI-DD-02`/`OI-DD-03` 조건부 검증 시험 통과
+  1. `OI-DD-01`(구조 승인 완료; 008 필드 배정 `11/12/13` 정합 완료) 및
+     `OI-DD-02`/`OI-DD-03` 조건부 검증 시험 통과
   2. Source/Successor와 L1/L2를 독립적으로 표현해 공통 SHM 그래프에 연결
   3. L1 Successor가 TT gate, L2 Successor가 CBS gate를 준수
   4. TT→TT, TT→CBS, CBS→TT, CBS→CBS 최소 조합 검증

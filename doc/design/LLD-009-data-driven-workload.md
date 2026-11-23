@@ -6,8 +6,10 @@ SPDX-License-Identifier: MIT
 # LLD-009: Data-Driven Workload — Phase 0 Low-Level Design
 
 **Date:** 2026-10-27
-**Last Updated:** 2026-11-22 (Phase 0 design-consistency refresh)
-**Status:** Draft — Phase 0 conditional design approval (`OI-DD-01` structural approval conditional on reconciliation of the field numbers with the 008 common registry; `OI-DD-02`/`OI-DD-03` conditionally approved; implementation not complete)
+**Last Updated:** 2026-11-23 (Phase 0 protobuf field-allocation alignment)
+**Status:** Draft — Phase 0 conditional design approval (`OI-DD-01`
+structural approval with 008 field allocation `11/12/13` aligned;
+`OI-DD-02`/`OI-DD-03` conditionally approved; implementation not complete)
 **Parent Baseline:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §6, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md)
 **Design Decisions:** [DDR-009](DDR-009-data-driven-workload.md) `D-DD-P0-01`..`05`, [DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`, `D-P0-06`
 
@@ -19,7 +21,7 @@ This document details only the common DAG data structures, ready/dispatch separa
 
 | Existing Integration Point | Phase 0 Detailed Design Intent | Approval / Compatibility Constraint |
 |:---|:---|:---|
-| `timpani-o/proto/*.proto` | An `optional` Task class override (`protoc >= 3.15`), structured `TaskReference` (`task_id` ↔ `TaskInfo.name`), and common DAG metadata for workload/task hash pairs (`ExecutionModel.DATA_FLOW = 2` is not used) | **`OI-DD-01` structural approval (conditional on 008 field-number reconciliation)** |
+| `timpani-o/proto/*.proto` | An `optional` Task class override (`protoc >= 3.15`), structured `TaskReference` (`task_id` ↔ `TaskInfo.name`), and common DAG metadata for workload/task hash pairs (`ExecutionModel.DATA_FLOW = 2` is not used) | **`OI-DD-01` structural approval (008 allocation `11/12/13` aligned)** |
 | `sample-apps/src/libttsched.h/c` | A versioned Pipeline extension (`40B` header), packed `ready_state`, a dispatch-only futex, preservation of `void ttsched_init()`, `g_shm_init_errno`, bulk TLS reset and attachment-state separation before/after publication (`g_attached_before_publish`), `release_source`/`current_job_token`/`wait_data`/`signal_ready`, `pipeline_commit_alive`, `atomic_name_equals`, a read-only seqlock, and VFS-free RT validation | **`OI-DD-02` conditionally approved** |
 | `timpani-o/src/schedinfo_service.{h,cpp}` | Explicit-over-inherit resolution of `TaskInfo.temporal_class` and safe rollback to the existing workload model when `RegenerateAllSchedules()` fails | Preserve the existing API |
 | `timpani-o/src/global_scheduler.*` | DAG validation, the CBS-only `hyperperiod_us > 0` guarantee, L1→L1 ordering in `place_tt_slots()` through `(topo_rank, deadline_us, ...)` + `min_start`, and separate graph metadata generation | Preserve the existing API |
@@ -1229,9 +1231,13 @@ If ready arrives late for a Phase 0 L1 slot, omit `update_current_slot()` and `F
 
 ---
 
-## 6. Minimum Protobuf Interface Extension Proposal (`OI-DD-01`, Structurally Approved — Conditional on 008 Common-Registry Field-Number Reconciliation)
+## 6. Protobuf Interface Proposal (`OI-DD-01`, 008 Field Allocation Aligned)
 
-> **Caution**: The message structure is approved, but the `TaskInfo` field numbers (`11`, `12`, and so on) SHALL be applied to the actual `.proto` file only after their reconciliation with the 008 document family is finalized in the shared common registry (`CON-DD-05`). The build environment requires **`protoc >= 3.15`** to use `proto3 optional`.
+> **Caution**: Preserve the field allocation established by 008:
+> `min_inter_arrival_us = 11`, `temporal_class = 12`, and
+> `predecessors = 13`. The proposal SHALL NOT be applied to the actual
+> `.proto` before Project Leader approval under `CON-DD-05`.
+> The build environment requires **`protoc >= 3.15`** for `proto3 optional`.
 
 ```protobuf
 // timpani-o/proto/schedinfo.proto (package schedinfo.v1)
@@ -1244,9 +1250,12 @@ message TaskReference {
 
 message TaskInfo {
   // ... existing fields 1..10 (field 1: string name) ...
+  // Field 11 is owned by the 008 Event-Driven extension.
+  uint32 min_inter_arrival_us = 11;
+  // 008 reserved field 12 for this per-Task override.
   // If absent, inherit SchedInfo.temporal_class.
-  optional TemporalClass temporal_class = 11;
-  repeated TaskReference predecessors = 12;
+  optional TemporalClass temporal_class = 12;
+  repeated TaskReference predecessors = 13;
 }
 
 // timpani-o/proto/node_control.proto (package timpani.node.v1)
@@ -1271,7 +1280,24 @@ message HierarchicalScheduleTable {
 }
 ```
 
-The recommended field numbers `11`, `12`, and `6` are shown as examples of currently open numbers in the schema and SHALL be finalized in the 008 document family/common registry before the actual `.proto` implementation. Interpret `TaskReference.task_id` as an exact 1:1 match with `TaskInfo.name` (field 1). Retain `SchedInfo.temporal_class` as the existing workload default. Because O must detect the presence of `TaskInfo.temporal_class`, use `proto3 optional` (`protoc >= 3.15`) rather than a plain enum. `PIPELINE_TRIGGER_ALL` is the sole valid trigger-enum value in Phase 0. Retain `ExecutionModel.DATA_FLOW = 2`, already defined in `node_control.proto`, in the enum to preserve wire compatibility, but fix it as unused in Phase 0 (O does not publish it, and N rejects it with `EINVAL` on receipt).
+The `TaskInfo` allocation is fixed as `11`/`12`/`13`. Field `11` remains the
+008-owned `min_inter_arrival_us`, field `12` uses the 008 reservation for
+the same per-Task `temporal_class` semantics, and field `13` holds
+`predecessors`. Keep `HierarchicalScheduleTable.pipeline_tasks = 6`. This
+resolves the wire-number collision but does not by itself approve moving the
+Task-level class override into Phase 0 or applying the schema change.
+
+Interpret `TaskReference.task_id` as an exact 1:1 match with
+`TaskInfo.name` (field 1). Retain `SchedInfo.temporal_class` as the existing
+workload default. Because O must detect the presence of
+`TaskInfo.temporal_class`, use `proto3 optional` (`protoc >= 3.15`) rather
+than a plain enum.
+
+`PIPELINE_TRIGGER_ALL` is the sole valid trigger-enum value in Phase 0.
+Retain `ExecutionModel.DATA_FLOW = 2`, already defined in
+`node_control.proto`, in the enum to preserve wire compatibility, but keep
+it unused in Phase 0. O does not publish it, and N rejects receipt with
+`EINVAL`.
 
 Do not duplicate dependencies in the TT/CBS entries themselves. Place O→N DAG metadata only in `PipelineTaskConfig`, and require N to connect each key pair to exactly one `TtSlot` or `CbsConfig`. For node-level SHM name lookup, retain the `REQ-DD-001` and `ASM-DD-01` constraint that the `1..15`-byte ASCII `task_id` be node-unique in Phase 0 as well.
 

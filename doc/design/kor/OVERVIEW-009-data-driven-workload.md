@@ -9,8 +9,8 @@ SPDX-License-Identifier: MIT
 |:--|:--|
 | 목적 | Data-Driven Workload를 무엇에 쓰고, 어떻게 실행하며, 현재 어디까지 지원하는지 빠르게 설명한다 |
 | 독자 | 아키텍처, 스케줄러, 애플리케이션, 검증 담당자 |
-| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-22 설계 정합성 현행화)과 연계 문서 008·011 |
-| 상태 | **Draft — Phase 0 조건부 설계 승인** (`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님) |
+| 기준 | REQ/SRS/DDR/HLD/LLD-009 Phase 0 설계안(2026-11-23 필드 배정 정합)과 연계 문서 008·011 |
+| 상태 | **Draft — Phase 0 조건부 설계 승인** (`OI-DD-01` 구조 승인·008 필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 아님) |
 
 > **한 문장 요약:** 필요한 선행 작업이 모두 끝나면 후행 Task가 실행 후보가 된다. 실제 실행 시점은 Task가 원래 가진 TT 또는 CBS 규칙이 결정한다.
 
@@ -309,7 +309,7 @@ Phase 0 합격 여부는 다음 네 가지로 판단한다.
 
 | 결정 | Phase 0 상태 / 후속 검토 질문 |
 |:--|:--|
-| **Pipeline 선언 형식 (`OI-DD-01`)** | **구조 승인 (필드 번호 008 공통 레지스트리 정합 확정 조건부)** — `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`(노드 내 유일 `1..15`B ASCII `task_id` ↔ `TaskInfo.name`, 중복 선행 거절), `(workload_id_hash, task_id_hash)` 공통 메타, `ExecutionModel.DATA_FLOW` Phase 0 미사용/거절 |
+| **Pipeline 선언 형식 (`OI-DD-01`)** | **구조 승인 (008 필드 배정 `11/12/13` 정합 완료; schema 반영은 CON-DD-05 승인 필요)** — `TaskInfo.min_inter_arrival_us = 11`, `TaskInfo.temporal_class = 12`, `predecessors = 13`, `optional TaskInfo.temporal_class` 명시 우선·상속, 동일 workload `TaskReference`(노드 내 유일 `1..15`B ASCII `task_id` ↔ `TaskInfo.name`, 중복 선행 거절), `(workload_id_hash, task_id_hash)` 공통 메타, `ExecutionModel.DATA_FLOW` Phase 0 미사용/거절 |
 | **공유 메모리/API (`OI-DD-02`)** | **조건부 승인** — 784B prefix 뒤 `40B` extension header(`instance_id`/`origin_epoch_ns`/`hyperperiod_us`)·`pipeline[]`, L1 `Timer Master`/L2 `ttsched_release_source()`가 stamp한 Source activation token을 읽는 `ttsched_current_job_token()`·읽기 전용 seqlock `wait_data()`(원자 이름 비교·FIFO·spurious wake 안전)·`signal_ready()`(in-flight `pipeline_commit_alive`·세대 불일치 `ESTALE`), `void ttsched_init()` 유지·`g_shm_init_errno`·게시 전/후 attach cursor 분리, 비RT `fstat()` + RT 무-VFS 원자 검증, `publication_guard`(`min(5 ms, H/4)`/`50 ms` Safe Abandonment), DAC/POSIX ACL 및 trusted-writer group 검증 조건 |
 | **TT/CBS 실행 연결 (`OI-DD-03`)** | **조건부 승인** — L1 TT slot 선행 `pending` 확인 후 `update_current_slot()`·`dispatch_counter++`·`FUTEX_WAKE` (`pending == false` 시 모두 생략·`SLOT_NONE` 덮어쓰기 금지, 커널 BPF `ops.enqueue()`가 kick 담당), L2 `ALL` fan-out commit 후 CBS budget/Gap gate, 혼합 조합·부분 입력·prevalidation 시험 통과 조건 |
 | **후속 시간·복구 계약 (`OI-DD-04`~`08`)** | **Phase 1/2 미결** — 혼합 DAG `E2E`, `Activation Window`, Pipeline 갱신, `SKIP`·`DATA_TIMEOUT`·Fallback·재시작 복구 기준 |

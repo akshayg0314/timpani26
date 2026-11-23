@@ -6,8 +6,11 @@ SPDX-License-Identifier: MIT
 # HLD-009: Data-Driven Workload — Phase 0 High-Level Architecture Design
 
 **Date:** 2026-10-27
-**Last Updated:** 2026-11-22 (Phase 0 design consistency update)
-**Status:** Draft — Conditional Phase 0 design approval (`OI-DD-01` structural approval, conditional upon confirming field-number 008 consistency with the common registry; `OI-DD-02`/`OI-DD-03` conditionally approved; not a declaration that the current implementation satisfies it)
+**Last Updated:** 2026-11-23 (Phase 0 protobuf field-allocation alignment)
+**Status:** Draft — Conditional Phase 0 design approval (`OI-DD-01`
+structural approval with 008 field allocation `11/12/13` aligned;
+`OI-DD-02`/`OI-DD-03` conditionally approved; not a declaration that the
+current implementation satisfies it)
 **Parent Baseline:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)
 **Decisions / Details:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 

@@ -6,8 +6,10 @@ SPDX-License-Identifier: MIT
 # DDR-009: Data-Driven Workload — Phase 0 Design Decision Record
 
 **Date:** 2026-10-27
-**Last Updated:** 2026-11-22 (Phase 0 design consistency update)
-**Status:** Draft — Conditional Phase 0 design approval (`OI-DD-01` structural approval, conditional upon confirming field-number 008 consistency with the common registry; `OI-DD-02`/`OI-DD-03` conditionally approved; not implementation completion)
+**Last Updated:** 2026-11-23 (Phase 0 protobuf field-allocation alignment)
+**Status:** Draft — Conditional Phase 0 design approval (`OI-DD-01`
+structural approval with 008 field allocation `11/12/13` aligned;
+`OI-DD-02`/`OI-DD-03` conditionally approved; not implementation completion)
 **Parent Baseline:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §9, [SRS-009](SRS-009-data-driven-workload.md)
 **Related Designs:** [HLD-009](HLD-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -133,7 +135,9 @@ flowchart LR
 - **Phase 1**: `Activation Window`, Harmonic periods, `E2E` analysis for mixed L1/L2 DAGs, normal updates, and SHM version management.
 - **Phase 2**: `SKIP`, root-cause `DATA_TIMEOUT`, Sink Fallback, and initialization of recovery state common across layers.
 - **Phase 0 Review Gates**:
-  1. Pass conditional-verification tests for `OI-DD-01` (structural approval complete; field-number 008 consistency with the common registry finalized) and `OI-DD-02`/`OI-DD-03`.
+  1. Pass conditional-verification tests for `OI-DD-01` (structural
+     approval complete; 008 field allocation `11/12/13` aligned) and
+     `OI-DD-02`/`OI-DD-03`.
   2. Represent Source/Successor and L1/L2 independently and connect them to the common SHM graph.
   3. Ensure that an L1 Successor obeys the TT gate and an L2 Successor obeys the CBS gate.
   4. Verify the minimum TT→TT, TT→CBS, CBS→TT, and CBS→CBS combinations.

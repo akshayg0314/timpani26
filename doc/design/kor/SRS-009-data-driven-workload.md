@@ -6,8 +6,10 @@ SPDX-License-Identifier: MIT
 # SRS-009: Data-Driven Workload — Phase 0 소프트웨어 요구사항 명세
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-22 (Phase 0 설계 정합성 현행화)  
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료 또는 기능안전 운용 승인 아님)  
+**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
+**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
+필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료
+또는 기능안전 운용 승인 아님)
 **상위 기준:** [SRS-000](SRS-000-timpani-system.md) §5.1 `REQ-DD-001`, [REQ-009](REQ-009-data-driven-workload.md) §1.5, §6, §7.1, §8.2, §9
 
 **연계 문서:** [HLD-009](HLD-009-data-driven-workload.md), [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [REQ-011](REQ-011-runtime-table-update.md), [DDR-011](DDR-011-runtime-table-update.md)
@@ -36,7 +38,7 @@ SPDX-License-Identifier: MIT
 | **SHM writer trust boundary** | `O_RDWR`는 전체 `/timpani_ttsched` object mapping이다. Phase 0의 `timpani-pub`은 상호 신뢰된 cooperative writer만 포함하며, 비신뢰 workload는 read-only group만 사용한다. slot/header 단위 악의적 writer 격리는 보장하지 않는다 |
 | **런타임 갱신과의 경계** | 시험 중 **Pipeline 포함 테이블의 런타임 갱신(`UPD-REPLACE / ADD / REMOVE / CLEAR`)은 수행하지 않음**(Phase 1 이관). 단, `/timpani_ttsched` 안정 게시 확인·제어 wake 비실행([DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`)과 Pipeline 미포함 일반 TT 테이블의 [REQ-011](REQ-011-runtime-table-update.md) Phase 0 정상 갱신 회귀 방지는 필수 |
 | **입력 및 역할 분담** | `Timpani-O` 입력(또는 시험 입력 경로)으로 DAG를 제출하고 `Timpani-O`만 검증·생성하여 기존 `O → N` 경로로 전송. `Timpani-N`이나 SHM 직접 주입만으로 End-to-End 성공 판정 금지 |
-| **인터페이스·승인 제약** | 기존 공개 C++ 메서드 및 `timpani_task_slot` 초기 레이아웃·`void ttsched_init()` 시그니처 보존. `.proto` 확장(`OI-DD-01` 구조 승인·필드 번호 008 공통 레지스트리 정합 확정 조건부), SHM 후방 확장 및 `libttsched` 신규 공개 API(`OI-DD-02` 조건부 승인)는 조건 충족·확정 후 코드 반영 |
+| **인터페이스·승인 제약** | 기존 공개 C++ 메서드 및 `timpani_task_slot` 초기 레이아웃·`void ttsched_init()` 시그니처 보존. `.proto` 확장은 008과 정합된 `TaskInfo` 필드 `11/12/13` 배정으로 구조 승인되었으나(`OI-DD-01`) schema 반영에는 `CON-DD-05` 승인이 필요하다. SHM 후방 확장 및 `libttsched` 신규 공개 API(`OI-DD-02` 조건부 승인)는 조건 충족·확정 후 코드 반영 |
 
 Harmonic 다중 주기, 계층별 정밀 시간 창, 정량 `E2E Feasibility`, `SKIP`, `DATA_TIMEOUT`은 Phase 0 범위에서 제외한다. Phase 0의 CPU/slot 배치는 기존 TT 또는 CBS scheduler 정책을 사용한다.
 
@@ -115,7 +117,7 @@ Harmonic 다중 주기, 계층별 정밀 시간 창, 정량 `E2E Feasibility`, `
 
 | REQ 항목 | Phase 0 결정 / 계약 | 상세 근거 |
 |:---|:---|:---|
-| **OI-DD-01** | `TaskInfo.temporal_class`는 optional(`protoc >= 3.15`) explicit-over-inherit 규칙을 따른다. 같은 workload의 `TaskReference`로 DAG를 전달하고(`task_id` ↔ `TaskInfo.name` 1:1, 노드 내 유일 `1..15`B ASCII, 중복 선행 선언 거절), O→N에서는 `(workload_id_hash, task_id_hash)` 쌍으로 공통 metadata를 식별한다(`ExecutionModel.DATA_FLOW = 2`는 Phase 0 미사용·N 수신 시 `EINVAL` 거절). Phase 0은 `ALL`만 지원하고 `E2E`는 OI-DD-05로 이관한다 **(구조 승인 — 필드 번호 008 공통 레지스트리 정합 확정 조건부)** | DDR-009 `D-DD-P0-03` |
+| **OI-DD-01** | `TaskInfo.temporal_class`는 optional(`protoc >= 3.15`) explicit-over-inherit 규칙을 따른다. 008 배정을 보존해 `min_inter_arrival_us = 11`, `temporal_class = 12`, `predecessors = 13`을 사용한다. 같은 workload의 `TaskReference`로 DAG를 전달하고(`task_id` ↔ `TaskInfo.name` 1:1, 노드 내 유일 `1..15`B ASCII, 중복 선행 선언 거절), O→N에서는 `(workload_id_hash, task_id_hash)` 쌍으로 공통 metadata를 식별한다(`ExecutionModel.DATA_FLOW = 2`는 Phase 0 미사용·N 수신 시 `EINVAL` 거절). Phase 0은 `ALL`만 지원하고 `E2E`는 OI-DD-05로 이관한다 **(구조 승인 — 008 필드 배정 11/12/13 정합 완료; schema 반영은 CON-DD-05 승인 필요)** | DDR-009 `D-DD-P0-03` |
 | **OI-DD-02** | 784바이트 prefix 뒤 40바이트 extension header(`magic/version/abi_size/publication_guard/instance_id/origin_epoch_ns/hyperperiod_us`)와 `pipeline[]`를 추가한다. Source `ready_state`는 release-valid 표식+activation ordinal을, Successor `ready_state`는 mask+ready sequence를 가진다. 기존 `void ttsched_init()` 시그니처를 유지하며(`g_shm_init_errno`·전체 TLS 리셋·게시 전/후 `g_attached_before_publish` attach cursor 분리), 앱 소유 payload의 publish-before-signal·token visibility·retention precondition과 `ttsched_release_source()`(L2 CBS Source 전용, `O_RDWR`)·`ttsched_current_job_token()`·`ttsched_wait_data()`(읽기 전용 seqlock, attach 이후 FIFO 순차 소비, spurious wake 재대기)·`ttsched_signal_ready()`(Sink no-op, in-flight `pipeline_commit_alive()` 정상 drain 완결, 세대 불일치 즉시 `ESTALE`) API 및 ABI/DAC·POSIX ACL/`errno` 계약 및 `timpani-pub` trusted-writer trust boundary, 비RT `ttsched_init()` `fstat()` 검증과 RT 무-VFS 순수 원자 재검증·16바이트 원자 이름 비교(`atomic_name_equals`), 고정 크기(no-shrink)·Safe Abandonment(`min(5 ms, H/4)` / `50 ms` drain, 양쪽 futex `INT_MAX` wake) 수명과 old-object late operation isolation, incoming-edge/`required_mask` bit bijection, preflight-failure mutation-free fan-out 사전검증(첫 CAS 후 process-crash rollback은 Phase 2), Source의 64비트 lock-free release-store와 Successor의 64비트 lock-free CAS, release snapshot 기반 job token/ready sequence 정확 일치, `dispatch_counter` 전용 futex, `O_RDWR`/`O_RDONLY` 시험 및 control-wake 시험을 조건으로 설계를 승인한다. 미충족 시험이 있으면 구현 병합을 보류한다 **(조건부 SHM/API 승인)** | DDR-009 `D-DD-P0-01`, `D-DD-P0-04` |
 | **OI-DD-03** | Phase 0 L1 Source는 `Timer Master`가 단일 공통 `base_cycle_start`와 Source별 파이프라인 주기 ordinal을, L2 CBS Source는 `O_RDWR` 이벤트 어댑터/시험 생성기가 `ttsched_release_source()`로 activation ordinal을 Source slot에 stamp한 뒤 Task를 깨우고, 앱은 `ttsched_current_job_token()`으로 그 snapshot을 취득한다. wall-clock 기반 재산출은 금지한다. L1 Successor는 Timer Master가 자신의 TT slot에서 `next_tt_start` 갱신 후 내부 경량 guard(`tm_pipeline_commit_enter`)로 `pending ready`를 확인한 경우에만 `update_current_slot()` 활성화·`dispatch_counter` 1 증가·`FUTEX_WAKE`를 수행해 커널 `ops.enqueue()`/`scx_bpf_kick_cpu` 경로로 집행하며(`pending == false` 시 모두 생략·`SLOT_NONE` 미덮어쓰기), L2 Successor는 전체 outgoing-edge CAS가 완료된 `ALL` fan-out commit에서 1 증가시키고 wake한 뒤 BPF가 기존 CBS budget/Gap을 집행한다. slot-miss pending, pending 최대 1개(`wake_delay < Source_period`), 첫 CAS 전에 발견된 뒤쪽 잘못된 edge의 mutation-free 거절, `Activation Window`/`SKIP` 이관을 조건으로 설계 승인하되, token boundary-delay/clock-adjustment·no-ready·mixed-class·late-ready·fan-out prevalidation 시험 미통과 시 구현 병합을 보류한다 **(조건부 Phase 0 실행 연결 승인)** | DDR-009 `D-DD-P0-03`, `D-DD-P0-05` |
 
