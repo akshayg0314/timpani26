@@ -47,7 +47,7 @@ SPDX-License-Identifier: MIT
 
 ### 1.1 어디서 무엇을 부르나 [P1 제안]
 
-FCW 소비자(`fcw_consumer`)를 예로 든다. 표의 번호는 아래 코드와 선언의 주석 번호와 같다.
+FCW 소비자(`fcw_consumer`)를 예로 든다. 표의 번호는 아래 코드와 선언의 주석 번호와 같다. 번호는 코드 위치를 가리키며 실행 순서가 아니다. 실행 순서는 1.2절에 있다.
 
 | | 어디서 | 무엇을 | 언제 | 자세히 |
 |:--|:--|:--|:--|:--|
@@ -118,7 +118,7 @@ Event API 없이 ②의 스레드 이름과 ⑤의 선언만 맞춰도 [현행]�
 
 ### 1.2 Event 한 건의 경로
 
-아래 그림은 Event 한 건이 지나는 경로다. 입력 어댑터가 도달 시각을 찍고 게시하면, 공통 큐가 수락하고 마감을 정한다. DeadlineMonitor는 워커가 끝나기를 기다리지 않고 마감 경과를 본다.
+아래 그림은 워커가 먼저 `ttsched_evt_wait`를 호출하고 Event가 없어 잠든 경우다. 입력 어댑터가 도달 시각을 찍고 게시하면 공통 큐에 Event와 마감을 기록하고, post 안에서 워커를 깨운다. 커널과 BPF가 워커를 실행하면 wait 안에서 Job을 시작하고 Event를 넘긴다([HLD-008 §4.2]). Event 공개(QUEUED)는 Job 시작(RUNNING)보다 먼저지만, post와 wait의 반환 순서는 보장되지 않는다. 이미 대기 중인 Event가 있으면 wait는 잠들지 않고 반환한다. DeadlineMonitor는 워커 완료와 독립적으로 마감을 감시한다.
 
 ```mermaid
 sequenceDiagram
@@ -128,19 +128,29 @@ sequenceDiagram
   participant Q as 공유 메모리 큐
   participant W as 워커
   participant DM as DeadlineMonitor
+  W->>LIB: ttsched_evt_wait 호출
+  Note over W: 대기 Event가 없으므로 잠든다(futex 대기)
   SRC->>IA: 입력 도달
   Note over IA: 선언된 경계에서 t_arr 기록
   IA->>LIB: ttsched_evt_post 호출
-  LIB->>Q: 수락, gen과 seq 부여, t_dl = t_arr + D
-  LIB-->>IA: 0 수락
-  W->>LIB: ttsched_evt_wait 호출
-  LIB->>Q: QUEUED에서 RUNNING으로 확정, t_begin 기록
-  LIB-->>W: Event 한 건 인계
-  Note over W: 블로킹 없이 처리
-  W->>LIB: ttsched_evt_done COMPLETED
-  LIB->>Q: t_end 기록, Job 종료
-  DM->>Q: 주기 스캔, now가 t_dl을 넘었는지 확인
-  Note over DM: 마감 실패는 완료를 기다리지 않고 표시
+  LIB->>Q: 수락, gen과 seq 부여, t_dl = t_arr + D (QUEUED)
+  par 게시 마무리
+    LIB-->>W: futex 깨움 요청 (post 안에서)
+    LIB-->>IA: 0 수락
+  and 워커 처리
+    Note over W: 대기 중이면 깨움 뒤 실행; 이미 큐를 보면 더 일찍 진행 가능
+    Note over W: 커널과 BPF가 워커를 CPU에 올린다(예산·TT 조건)
+    W->>Q: wait 안에서 QUEUED를 RUNNING으로 확정 (t_begin은 워커가 사적으로 기록)
+    Note over W: wait 반환, Event 한 건 인계
+    Note over W: 블로킹 없이 처리
+    W->>LIB: ttsched_evt_done COMPLETED
+    LIB->>Q: 종료 상태 기록, Job 종료 (t_end는 Job 로그에 기록)
+    W->>LIB: 다음 ttsched_evt_wait 호출
+    Note over W: 대기 Event가 있으면 잠들지 않고 다음 Job을 시작한다
+  and 독립된 마감 감시
+    DM->>Q: 주기 스캔, now가 t_dl을 넘었는지 확인
+    Note over DM: 마감 실패는 완료를 기다리지 않고 표시
+  end
 ```
 
 **Job 상태.** `t_begin`은 wait가 RUNNING으로 바꾼 시각이다. `t_end`는 워커가 done을 게시하기 직전에 읽은 시각이다. `now`는 DeadlineMonitor가 읽은 현재 시각이다.
