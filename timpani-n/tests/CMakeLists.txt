@@ -46,3 +46,24 @@ set_tests_properties(JobFsmTest PROPERTIES
     TIMEOUT 30
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+# replenisher.{h,cpp}: backup replenishment loop, with a fake kick backend.
+add_executable(test_replenisher
+    test_replenisher.cpp
+    ../src/replenisher.cpp
+)
+target_include_directories(test_replenisher PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_compile_options(test_replenisher PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(test_replenisher
+    GTest::gtest
+    GTest::gtest_main
+    pthread
+)
+
+add_test(NAME ReplenisherTest COMMAND test_replenisher)
+set_tests_properties(ReplenisherTest PROPERTIES
+    TIMEOUT 60
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)

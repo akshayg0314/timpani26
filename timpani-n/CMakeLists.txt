@@ -228,6 +228,7 @@ set(TIMPANI_N_SOURCES
     src/timer_master.cpp
     src/bpf_loader.cpp
     src/fault_monitor.cpp
+    src/replenisher.cpp
     src/task_registry.cpp
     src/grpc/node_client.cpp
     ${NODE_CONTROL_PROTO_SRC}
