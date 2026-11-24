@@ -20,8 +20,9 @@
  *   2. Charging saturates remaining_us at 0. A server with no budget that is
  *      still runnable is throttled at enqueue; exhausting the budget and then
  *      sleeping starts no throttle episode.
- *   3. Promotion: a throttled server is refilled once now >= replenish_at_ns
- *      and its new window starts at now.
+ *   3. Promotion: a server without budget is refilled once
+ *      now >= replenish_at_ns and its new window starts at now. That happens
+ *      in the promotion scan, or at enqueue if the window is already over.
  *   4. An active, not throttled server is never refilled, even after its
  *      window end has passed.
  */
@@ -119,26 +120,6 @@ static __always_inline __u32 cbs_charge(struct CbsState* c, __u64 now)
     return used_us > CBS_US_MAX ? (__u32)CBS_US_MAX : (__u32)used_us;
 }
 
-/* Rule 2, enforcement part. Call when the task is about to be queued. No
- * refill happens here. Returns CBS_ENQ_*; CBS_ENQ_THROTTLE_ENTER is returned
- * once per throttle episode. */
-static __always_inline int cbs_on_enqueue(struct CbsState* c,
-                                          struct TaskMeta* m)
-{
-    if (c->remaining_us != 0) {
-        c->throttled = 0;
-        return CBS_ENQ_READY;
-    }
-
-    m->job_flags |= JOB_FLAG_THROTTLED;
-    if (c->throttled)
-        return CBS_ENQ_THROTTLE_STAY;
-
-    c->throttled = 1;
-    c->throttle_episodes++;
-    return CBS_ENQ_THROTTLE_ENTER;
-}
-
 /* Rule 3. Returns 1 if the server may run again. No tolerance is applied. */
 static __always_inline int cbs_try_promote(struct CbsState* c, __u64 now)
 {
@@ -156,11 +137,60 @@ static __always_inline int cbs_try_promote(struct CbsState* c, __u64 now)
     return 1;
 }
 
-/* A promoted task is ranked by its promotion time, so it goes behind the
- * tasks already waiting in the ready queue. */
+/* Records the promotion time as the task's queue key. A promoted task goes
+ * behind the tasks already waiting. The ready queue is FIFO today, so the
+ * caller gets that order by appending; the key is for a ranked queue. */
 static __always_inline void job_fsm_on_promote(struct TaskMeta* m, __u64 now)
 {
     m->queue_key_ns = now;
+}
+
+/* Rule 2, enforcement part. Call when the task is about to be queued.
+ * Returns CBS_ENQ_*; CBS_ENQ_THROTTLE_ENTER is returned once per throttle
+ * episode. A server that is out of budget when its window has already ended
+ * has nothing to wait for: rule 3 is applied on the spot and the task is
+ * ready. That is not a throttle episode. */
+static __always_inline int cbs_on_enqueue(struct CbsState* c,
+                                          struct TaskMeta* m, __u64 now)
+{
+    if (c->remaining_us == 0 && now >= c->replenish_at_ns &&
+        cbs_try_promote(c, now))
+        job_fsm_on_promote(m, now);
+
+    if (c->remaining_us != 0) {
+        c->throttled = 0;
+        return CBS_ENQ_READY;
+    }
+
+    m->job_flags |= JOB_FLAG_THROTTLED;
+    if (c->throttled)
+        return CBS_ENQ_THROTTLE_STAY;
+
+    c->throttled = 1;
+    c->throttle_episodes++;
+    return CBS_ENQ_THROTTLE_ENTER;
+}
+
+/* Transitional L2 deadline check, kept from the scheduler before the
+ * event-job work. Call when the task stops running: the interval misses if
+ * that stop comes after t_act + deadline_us. It is judged from the kernel
+ * activation, not from the Event arrival, and goes away when the node-side
+ * deadline monitor takes over (DDR-008 D-20). For a task that was already
+ * runnable when it was bound, t_act is the bind time. Returns 1 at most once
+ * per execution interval (JOB_FLAG_DMISS). */
+static __always_inline int job_fsm_legacy_deadline_missed(struct TaskMeta* m,
+                                                          __u32 deadline_us,
+                                                          __u64 now)
+{
+    if (m->job_state != JOB_ACTIVE || deadline_us == 0)
+        return 0;
+    if (m->job_flags & JOB_FLAG_DMISS)
+        return 0;
+    if (now <= m->activation_ns + (__u64)deadline_us * CBS_NS_PER_US)
+        return 0;
+
+    m->job_flags |= JOB_FLAG_DMISS;
+    return 1;
 }
 
 /* Voluntary sleep. Returns 1 when an execution interval ended. */

@@ -183,7 +183,7 @@ TEST(JobFsmTest, NoMitCheckOnShortSpacing)
     job_fsm_on_quiescent(&meta);
 
     job_fsm_start_interval(&meta, &server, at(1));
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(1));
 
     EXPECT_EQ(meta.job_state, JOB_ACTIVE);
     EXPECT_EQ(meta.job_flags, JOB_FLAG_CARRYOVER);
@@ -279,7 +279,7 @@ TEST(CbsWindowTest, ConformingActivationAlwaysRefills)
     TaskMeta meta = make_waiting_task();
 
     const int refilled = cbs_on_activation(&server, at(34));
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(34));
 
     EXPECT_EQ(refilled, 1);
     EXPECT_EQ(server.remaining_us, BUDGET_US);
@@ -370,7 +370,7 @@ TEST(CbsWindowTest, AfterViolationWindowShiftsThenRecoversWithSlack)
 
     // J2 at 15 ms: window [0, 18) still open, no budget -> throttled.
     job_fsm_start_interval(&meta, &server, at(15));
-    const int j2_verdict = cbs_on_enqueue(&server, &meta);
+    const int j2_verdict = cbs_on_enqueue(&server, &meta, at(15));
     const int promoted_early = cbs_try_promote(&server, at(17));
     const int promoted = cbs_try_promote(&server, at(18));
     const __u64 shifted_window_end_ns = server.replenish_at_ns;
@@ -379,7 +379,7 @@ TEST(CbsWindowTest, AfterViolationWindowShiftsThenRecoversWithSlack)
 
     // J3 at 33 ms: inside [18, 36), carries the remaining 0.5 ms over.
     job_fsm_start_interval(&meta, &server, at(33));
-    const int j3_verdict = cbs_on_enqueue(&server, &meta);
+    const int j3_verdict = cbs_on_enqueue(&server, &meta, at(33));
     const __u32 j3_flags = meta.job_flags;
     run_and_charge(&server, at(33), 400 * NS_PER_US);
     job_fsm_on_quiescent(&meta);
@@ -467,9 +467,10 @@ TEST(CbsWindowTest, ConsumptionPerWindowBounded)
     int window = 0;
 
     for (__u64 t = at(0); t < at(0) + WINDOWS * PERIOD_NS; t += STEP_NS) {
-        if (cbs_on_enqueue(&server, &meta) != CBS_ENQ_READY) {
-            if (!cbs_try_promote(&server, t))
-                continue;  // throttled until the window ends
+        const __u64 window_end_before_ns = server.replenish_at_ns;
+        if (cbs_on_enqueue(&server, &meta, t) != CBS_ENQ_READY)
+            continue;  // throttled until the window ends
+        if (server.replenish_at_ns != window_end_before_ns) {
             window++;
             ASSERT_LT(window, WINDOWS);
             window_start_ns[window] = t;
@@ -499,13 +500,13 @@ TEST(CbsWindowTest, AfterViolationWithoutSlackEachJobWaitsForWindowEnd)
     run_and_charge(&server, at(0), BUDGET_US * NS_PER_US);
     job_fsm_on_quiescent(&meta);
     job_fsm_start_interval(&meta, &server, at(15));
-    cbs_on_enqueue(&server, &meta);
+    cbs_on_enqueue(&server, &meta, at(15));
     cbs_try_promote(&server, at(18));
     run_and_charge(&server, at(18), BUDGET_US * NS_PER_US);
     job_fsm_on_quiescent(&meta);
 
     job_fsm_start_interval(&meta, &server, at(33));
-    const int j3_verdict = cbs_on_enqueue(&server, &meta);
+    const int j3_verdict = cbs_on_enqueue(&server, &meta, at(33));
     const __u32 j3_flags = meta.job_flags;
     const int promoted_early = cbs_try_promote(&server, at(36) - 1);
     const int promoted = cbs_try_promote(&server, at(36));
@@ -543,7 +544,7 @@ TEST(CbsThrottleTest, ExactBudgetStillRunnableThrottles)
     job_fsm_start_interval(&meta, &server, at(0));
     run_and_charge(&server, at(0), BUDGET_US * NS_PER_US);
 
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(2));
 
     EXPECT_EQ(verdict, CBS_ENQ_THROTTLE_ENTER);
     EXPECT_EQ(server.throttled, 1u);
@@ -557,9 +558,9 @@ TEST(CbsThrottleTest, ThrottleTransitionOnce)
     CbsState server = make_server();
     job_fsm_start_interval(&meta, &server, at(0));
     run_and_charge(&server, at(0), BUDGET_US * NS_PER_US);
-    cbs_on_enqueue(&server, &meta);
+    cbs_on_enqueue(&server, &meta, at(2));
 
-    const int verdict = cbs_on_enqueue(&server, &meta);  // same episode
+    const int verdict = cbs_on_enqueue(&server, &meta, at(3));  // same episode
 
     EXPECT_EQ(verdict, CBS_ENQ_THROTTLE_STAY);
     EXPECT_EQ(server.throttle_episodes, 1u);
@@ -569,18 +570,84 @@ TEST(CbsThrottleTest, EnqueueWithBudgetClearsThrottledFlag)
 {
     TaskMeta meta = make_waiting_task();
     CbsState server = make_server();
+    cbs_on_activation(&server, at(0));
     server.remaining_us = 300;
     server.throttled = 1;  // stale: budget is available
 
-    const int ready = cbs_on_enqueue(&server, &meta);
+    const int ready = cbs_on_enqueue(&server, &meta, at(5));
     const __u32 throttled_when_ready = server.throttled;
     server.remaining_us = 0;
-    const int exhausted = cbs_on_enqueue(&server, &meta);
+    const int exhausted = cbs_on_enqueue(&server, &meta, at(6));
 
     EXPECT_EQ(ready, CBS_ENQ_READY);
     EXPECT_EQ(throttled_when_ready, 0u);
     EXPECT_EQ(exhausted, CBS_ENQ_THROTTLE_ENTER);
     EXPECT_EQ(server.throttle_episodes, 1u);
+}
+
+// A task that ran past its window end (for example alone on its CPU) and is
+// then requeued has nothing to wait for: rule 3 applies at enqueue.
+TEST(CbsThrottleTest, EnqueueAfterWindowEndPromotesInPlace)
+{
+    TaskMeta meta = make_waiting_task();
+    CbsState server = make_server();
+    job_fsm_start_interval(&meta, &server, at(0));
+    run_and_charge(&server, at(0), BUDGET_US * NS_PER_US);
+
+    const int verdict = cbs_on_enqueue(&server, &meta, at(19));
+
+    EXPECT_EQ(verdict, CBS_ENQ_READY);
+    EXPECT_EQ(server.remaining_us, BUDGET_US);
+    EXPECT_EQ(server.replenish_at_ns, at(19) + PERIOD_NS);
+    EXPECT_EQ(server.throttle_episodes, 0u);
+    EXPECT_EQ(meta.job_flags & JOB_FLAG_THROTTLED, 0u);
+    EXPECT_EQ(meta.queue_key_ns, at(19));  // behind the waiting tasks
+}
+
+TEST(CbsThrottleTest, EnqueueAtWindowEndPromotesOneNanosecondEarlierThrottles)
+{
+    TaskMeta early_meta = make_waiting_task();
+    CbsState early = make_server();
+    job_fsm_start_interval(&early_meta, &early, at(0));
+    run_and_charge(&early, at(0), BUDGET_US * NS_PER_US);
+    TaskMeta on_time_meta = make_waiting_task();
+    CbsState on_time = make_server();
+    job_fsm_start_interval(&on_time_meta, &on_time, at(0));
+    run_and_charge(&on_time, at(0), BUDGET_US * NS_PER_US);
+
+    const int before_end = cbs_on_enqueue(&early, &early_meta, at(18) - 1);
+    const int at_end = cbs_on_enqueue(&on_time, &on_time_meta, at(18));
+
+    EXPECT_EQ(before_end, CBS_ENQ_THROTTLE_ENTER);
+    EXPECT_EQ(early.replenish_at_ns, at(0) + PERIOD_NS);
+    EXPECT_EQ(at_end, CBS_ENQ_READY);
+    EXPECT_EQ(on_time.replenish_at_ns, at(18) + PERIOD_NS);
+}
+
+TEST(CbsThrottleTest, EnqueueWithBudgetAfterWindowEndDoesNotRefill)
+{
+    TaskMeta meta = make_waiting_task();
+    CbsState server = make_server();
+    job_fsm_start_interval(&meta, &server, at(0));
+    run_and_charge(&server, at(0), 500 * NS_PER_US);
+
+    const int verdict = cbs_on_enqueue(&server, &meta, at(30));  // rule 4
+
+    EXPECT_EQ(verdict, CBS_ENQ_READY);
+    EXPECT_EQ(server.remaining_us, BUDGET_US - 500);
+    EXPECT_EQ(server.replenish_at_ns, at(0) + PERIOD_NS);
+}
+
+TEST(CbsThrottleTest, ZeroBudgetServerIsNeverReady)
+{
+    TaskMeta meta = make_waiting_task();
+    CbsState server = make_server();
+    server.budget_us = 0;
+
+    const int verdict = cbs_on_enqueue(&server, &meta, at(5));
+
+    EXPECT_NE(verdict, CBS_ENQ_READY);
+    EXPECT_EQ(server.remaining_us, 0u);
 }
 
 TEST(CbsThrottleTest, NewEpisodeAfterPromotionIsCountedAgain)
@@ -589,11 +656,11 @@ TEST(CbsThrottleTest, NewEpisodeAfterPromotionIsCountedAgain)
     CbsState server = make_server();
     job_fsm_start_interval(&meta, &server, at(0));
     run_and_charge(&server, at(0), BUDGET_US * NS_PER_US);
-    cbs_on_enqueue(&server, &meta);
+    cbs_on_enqueue(&server, &meta, at(2));
     cbs_try_promote(&server, at(18));
     run_and_charge(&server, at(18), BUDGET_US * NS_PER_US);
 
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(20));
 
     EXPECT_EQ(verdict, CBS_ENQ_THROTTLE_ENTER);
     EXPECT_EQ(server.throttle_episodes, 2u);
@@ -608,7 +675,7 @@ TEST(CbsThrottleTest, WakeWithoutEligibleRefillThrottles)
     job_fsm_on_quiescent(&meta);
 
     job_fsm_start_interval(&meta, &server, at(10));  // window [0, 18) open
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(10));
 
     EXPECT_EQ(verdict, CBS_ENQ_THROTTLE_ENTER);
     EXPECT_EQ(server.replenish_at_ns, at(0) + PERIOD_NS);  // window kept
@@ -624,7 +691,7 @@ TEST(CbsThrottleTest, WakeWithEligibleRefillDoesNotThrottle)
     job_fsm_on_quiescent(&meta);
 
     job_fsm_start_interval(&meta, &server, at(18));
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(18));
 
     EXPECT_EQ(verdict, CBS_ENQ_READY);
     EXPECT_EQ(server.throttled, 0u);
@@ -641,7 +708,7 @@ TEST(CbsThrottleTest, WakeWithRemainingBudgetInsideWindowDoesNotThrottle)
     job_fsm_on_quiescent(&meta);
 
     job_fsm_start_interval(&meta, &server, at(10));
-    const int verdict = cbs_on_enqueue(&server, &meta);
+    const int verdict = cbs_on_enqueue(&server, &meta, at(10));
 
     EXPECT_EQ(verdict, CBS_ENQ_READY);
     EXPECT_EQ(meta.job_flags, JOB_FLAG_CARRYOVER);
@@ -684,4 +751,67 @@ TEST(QueueOrderTest, StartIntervalWithoutServerStillStartsInterval)
 
     EXPECT_EQ(started, 1);
     EXPECT_EQ(meta.job_flags, 0u);
+}
+
+// ---- Transitional L2 deadline check (removed with DDR-008 D-20) -----------
+
+TEST(LegacyDeadlineTest, MissIsReportedOncePerInterval)
+{
+    constexpr __u32 DEADLINE_US = 5000;
+    TaskMeta meta = make_waiting_task();
+    job_fsm_on_runnable(&meta, at(0));
+
+    const int first = job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(6));
+    const int again = job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(7));
+
+    EXPECT_EQ(first, 1);
+    EXPECT_EQ(again, 0);
+    EXPECT_EQ(meta.job_flags, JOB_FLAG_DMISS);
+    EXPECT_EQ(meta.activation_ns, at(0));  // t_act is not cleared any more
+}
+
+TEST(LegacyDeadlineTest, StopAtExactDeadlineIsNotAMiss)
+{
+    constexpr __u32 DEADLINE_US = 5000;
+    TaskMeta meta = make_waiting_task();
+    job_fsm_on_runnable(&meta, at(0));
+
+    const int at_deadline =
+        job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(5));
+    const int just_after =
+        job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(5) + 1);
+
+    EXPECT_EQ(at_deadline, 0);
+    EXPECT_EQ(just_after, 1);
+}
+
+TEST(LegacyDeadlineTest, NextIntervalIsJudgedAgain)
+{
+    constexpr __u32 DEADLINE_US = 5000;
+    TaskMeta meta = make_waiting_task();
+    job_fsm_on_runnable(&meta, at(0));
+    job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(6));
+    job_fsm_on_quiescent(&meta);
+    job_fsm_on_runnable(&meta, at(20));
+
+    const int in_time =
+        job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(24));
+    const int late = job_fsm_legacy_deadline_missed(&meta, DEADLINE_US, at(26));
+
+    EXPECT_EQ(in_time, 0);
+    EXPECT_EQ(late, 1);
+}
+
+TEST(LegacyDeadlineTest, NoVerdictOutsideAnIntervalOrWithoutDeadline)
+{
+    TaskMeta waiting = make_waiting_task();
+    TaskMeta active = make_waiting_task();
+    job_fsm_on_runnable(&active, at(0));
+
+    const int outside = job_fsm_legacy_deadline_missed(&waiting, 5000, at(99));
+    const int no_deadline = job_fsm_legacy_deadline_missed(&active, 0, at(99));
+
+    EXPECT_EQ(outside, 0);
+    EXPECT_EQ(no_deadline, 0);
+    EXPECT_EQ(active.job_flags, 0u);
 }

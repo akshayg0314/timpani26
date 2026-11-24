@@ -185,13 +185,6 @@ std::string resolve_node_id(const RuntimeOptions& options)
     return "node";
 }
 
-uint64_t monotonic_now_ns()
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
-}
-
 timpani::node::v1::FaultType to_proto_fault_type(uint8_t bpf_fault_type)
 {
     switch (bpf_fault_type) {
@@ -819,6 +812,18 @@ int main(int argc, char** argv)
 
                     for (const auto& cbs_entry : layer.cbs_entries()) {
                         const std::string& task_id = cbs_entry.task_id();
+                        // A server needs a budget and a window length: with
+                        // either at 0 the budget cannot be enforced.
+                        if (cbs_entry.budget_us() == 0 ||
+                            cbs_entry.period_us() == 0) {
+                            std::cerr << "[main] CBS entry rejected, budget="
+                                      << cbs_entry.budget_us() << "us period="
+                                      << cbs_entry.period_us()
+                                      << "us: " << task_id << std::endl;
+                            record_apply_error(
+                                "CBS budget or period is 0: " + task_id);
+                            continue;
+                        }
                         bool is_thread = false;
                         pid_t pid = find_task_by_comm(task_id, is_thread);
                         const char* id_kind = is_thread ? "tid" : "pid";
@@ -864,24 +869,18 @@ int main(int argc, char** argv)
                             continue;
                         }
 
-                        if (apply_sched_ext(pid, id_kind) == 0) {
-                            std::cout << "[main] Applied SCHED_EXT to CBS "
-                                      << task_id << " " << id_kind << "=" << pid << std::endl;
-                        }
-
+                        // The server state must exist before the task
+                        // enters SCHED_EXT: from then on BPF owns the
+                        // budget and the window. No window is open yet
+                        // (replenish_at_ns = 0); the first activation
+                        // opens it.
                         CbsState cbs_state = {};
                         cbs_state.task_id_hash = cbs_entry.task_id_hash();
                         cbs_state.budget_us = cbs_entry.budget_us();
                         cbs_state.period_us = cbs_entry.period_us();
                         cbs_state.remaining_us = cbs_entry.budget_us();
                         cbs_state.exec_start_ns = 0;
-                        cbs_state.replenish_at_ns =
-                            cbs_entry.period_us() > 0
-                                ? monotonic_now_ns() +
-                                      static_cast<uint64_t>(
-                                          cbs_entry.period_us()) *
-                                          1000ULL
-                                : 0;
+                        cbs_state.replenish_at_ns = 0;
                         cbs_state.deadline_us = cbs_entry.deadline_us();
 
                         uint64_t cbs_key = cbs_entry.workload_id_hash() ^
@@ -892,6 +891,12 @@ int main(int argc, char** argv)
                             record_apply_error("CBS state update failed: " +
                                                task_id);
                             continue;
+                        }
+
+                        if (apply_sched_ext(pid, id_kind) == 0) {
+                            std::cout << "[main] Applied SCHED_EXT to CBS "
+                                      << task_id << " " << id_kind << "="
+                                      << pid << std::endl;
                         }
 
                         std::cout << "[main] Registered CBS task in BPF: "

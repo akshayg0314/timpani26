@@ -23,8 +23,10 @@ extern "C" {
 #define JOB_ACTIVE 1
 
 /* Flags of the current execution interval (TaskMeta.job_flags).
- * Bits 0, 2, 3 and 4 are retired and must not be reused. */
+ * Bits 0, 2 and 3 are retired and must not be reused. Bit 4 keeps its DMISS
+ * meaning while the BPF deadline check exists and is retired with it. */
 #define JOB_FLAG_THROTTLED (1u << 1) /* server was throttled in this interval */
+#define JOB_FLAG_DMISS (1u << 4)     /* transitional, see job_fsm.h */
 #define JOB_FLAG_CARRYOVER (1u << 6) /* interval started without a refill */
 
 /* Tolerance of the activation refill rule only (see cbs_on_activation() in
@@ -82,7 +84,7 @@ struct TaskMeta {
     __u32 job_flags;          /* JOB_FLAG_*, reset at interval start */
     __u32 run_seq;            /* interval counter */
     __u64 t_start_ns;         /* first run after activation; 0 until set */
-    __u64 queue_key_ns;       /* ready-queue rank: t_act, or promotion time */
+    __u64 queue_key_ns;       /* t_act, or promotion time (FIFO queue today) */
     __u32 budget_used_us;     /* per interval */
     __u32 _pad;
 };

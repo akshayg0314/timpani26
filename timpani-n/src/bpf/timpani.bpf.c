@@ -10,6 +10,7 @@
 #define _LINUX_TYPES_H  // Prevent linux/types.h redefinition clash with
                         // vmlinux.h
 #include "maps.h"
+#include "job_fsm.h"
 #include "../../../sample-apps/src/tt_completion.h"
 
 // SCX DSQ IDs
@@ -124,17 +125,34 @@ static __always_inline __u64 cbs_key_from_meta(const struct TaskMeta* meta)
     return meta->workload_id_hash ^ meta->task_id_hash;
 }
 
-static __always_inline void cbs_lazy_replenish(struct CbsState* cbs, __u64 now)
+/* CBS budget rules live in job_fsm.h (activation-based replenishment
+ * window). BPF refills the budget only at an activation (runnable) and at a
+ * promotion (promotion scan, or enqueue when the window is already over).
+ * User space writes the server state only when it registers the task.
+ *
+ * Known limit: a task that is alone on its CPU is kept running by the kernel
+ * without going through enqueue(), so it is neither throttled nor reported
+ * while it overruns. Enforcing that case needs SCX_OPS_ENQ_LAST together
+ * with the backup replenisher. */
+
+static __always_inline void emit_l2_fault(const struct TaskMeta* meta,
+                                          __u8 fault_type,
+                                          __u64 expected_deadline_ns,
+                                          __u64 actual_completion_ns)
 {
-    if (!cbs || cbs->period_us == 0 || now < cbs->replenish_at_ns)
+    struct FaultEvent* fault;
+
+    fault = bpf_ringbuf_reserve(&fault_ringbuf, sizeof(*fault), 0);
+    if (!fault)
         return;
 
-    __u64 period_ns = (__u64)cbs->period_us * 1000ULL;
-    __u64 elapsed = now - cbs->replenish_at_ns;
-    __u64 periods = elapsed / period_ns + 1;
-
-    cbs->remaining_us = cbs->budget_us;
-    cbs->replenish_at_ns += periods * period_ns;
+    fault->fault_type = fault_type;
+    fault->task_id_hash = meta->task_id_hash;
+    fault->workload_id_hash = meta->workload_id_hash;
+    fault->cpu = bpf_get_smp_processor_id();
+    fault->expected_deadline_ns = expected_deadline_ns;
+    fault->actual_completion_ns = actual_completion_ns;
+    bpf_ringbuf_submit(fault, 0);
 }
 
 static __always_inline bool tt_active_on_cpu(__u32 cpu, __u64 now)
@@ -232,8 +250,10 @@ static __always_inline void promote_throttled_if_replenished(__u64 now)
         if (!cbs)
             continue;
 
-        cbs_lazy_replenish(cbs, now);
-        if (cbs->remaining_us > 0) {
+        /* Rule 3: refill once the window has ended; the new window starts
+         * now and the task is appended behind the ones already waiting. */
+        if (cbs_try_promote(cbs, now)) {
+            job_fsm_on_promote(meta, now);
             scx_bpf_dispatch_from_dsq(&it, p, DSQ_CBS, 0);
             scx_bpf_kick_cpu(meta->assigned_cpu, SCX_KICK_IDLE);
         }
@@ -254,8 +274,7 @@ s32 BPF_PROG(select_cpu, struct task_struct* p, s32 prev_cpu, u64 wake_flags)
     struct TaskMeta* meta = bpf_map_lookup_elem(&task_meta_map, &pid);
     if (meta && (meta->scheduling_type == SCHED_TYPE_TT ||
                  meta->scheduling_type == SCHED_TYPE_CBS)) {
-        if (meta->scheduling_type == SCHED_TYPE_CBS)
-            meta->activation_ns = bpf_ktime_get_ns();
+        /* The CBS activation time is recorded in runnable(). */
         /* Steer to the CPU assigned in the schedule table */
         __u32 cpu = meta->assigned_cpu;
         if (cpu < 64 && (isolated_cpu_mask & (1ULL << cpu))) {
@@ -263,6 +282,25 @@ s32 BPF_PROG(select_cpu, struct task_struct* p, s32 prev_cpu, u64 wake_flags)
         }
     }
     return prev_cpu;
+}
+
+/* A wakeup of an L2 task starts an execution interval. Rule 1: the budget is
+ * refilled here if the previous window has ended; otherwise the interval
+ * runs on what is left and is marked CARRYOVER. Called before enqueue(). */
+SEC("struct_ops/runnable")
+void BPF_PROG(runnable, struct task_struct* p, u64 enq_flags)
+{
+    __u32 pid = p->pid;
+    struct TaskMeta* meta = bpf_map_lookup_elem(&task_meta_map, &pid);
+    struct CbsState* cbs;
+    __u64 key;
+
+    if (!meta || meta->scheduling_type != SCHED_TYPE_CBS)
+        return;
+
+    key = cbs_key_from_meta(meta);
+    cbs = bpf_map_lookup_elem(&cbs_map, &key);
+    job_fsm_start_interval(meta, cbs, bpf_ktime_get_ns());
 }
 
 SEC("struct_ops/enqueue")
@@ -295,10 +333,17 @@ void BPF_PROG(enqueue, struct task_struct* p, u64 enq_flags)
         struct CbsState* cbs =
             bpf_map_lookup_elem(&cbs_map, &key);
         if (cbs) {
+            /* Rule 2: a server without budget that is still runnable
+             * waits in DSQ_THROTTLED for its window end; BUDGET_EXCEED is
+             * reported once per throttle episode. If the window is already
+             * over, the server is refilled here and stays ready. */
             __u64 now = bpf_ktime_get_ns();
-            cbs_lazy_replenish(cbs, now);
-            if (cbs->remaining_us == 0) {
-                /* Budget exhausted, throttle to DSQ_THROTTLED */
+            int verdict = cbs_on_enqueue(cbs, meta, now);
+
+            if (verdict != CBS_ENQ_READY) {
+                if (verdict == CBS_ENQ_THROTTLE_ENTER)
+                    emit_l2_fault(meta, FAULT_BUDGET_EXCEED,
+                                  cbs->replenish_at_ns, now);
                 scx_bpf_dispatch(p, DSQ_THROTTLED, SCX_SLICE_DFL, cbs_flags);
                 return;
             }
@@ -345,7 +390,7 @@ void BPF_PROG(running, struct task_struct* p)
                 __u32 effective_us;
                 __u32 next_tt_us;
 
-                cbs_lazy_replenish(cbs, now);
+                job_fsm_on_running(meta, now);
                 effective_us = cbs->remaining_us;
                 next_tt_us = us_until_next_tt((__u32)bpf_get_smp_processor_id(),
                                               now);
@@ -376,64 +421,41 @@ void BPF_PROG(stopping, struct task_struct* p, bool runnable)
         struct CbsState* cbs =
             bpf_map_lookup_elem(&cbs_map, &key);
         if (cbs && cbs->exec_start_ns > 0) {
-            __u64 elapsed_ns = now - cbs->exec_start_ns;
-            __u32 elapsed_us = (__u32)(elapsed_ns / 1000ULL);
-            if (elapsed_us >= cbs->remaining_us)
-                cbs->remaining_us = 0;
-            else
-                cbs->remaining_us -= elapsed_us;
-            cbs->exec_start_ns = 0;
+            /* Rule 2: charge only. Running out of budget is not reported
+             * here; the report belongs to the throttle entry in enqueue(),
+             * so a task that uses its budget and then sleeps raises
+             * nothing. The window end is left untouched. */
+            meta->budget_used_us += cbs_charge(cbs, now);
 
-            /* If deadline missed, emit DMISS fault */
-	    /* CBS deadline miss: task finished after its relative deadline */
-            if  (meta->activation_ns > 0 && cbs->deadline_us > 0) {
-                __u64 abs_deadline = meta->activation_ns + cbs->deadline_us * 1000ULL;
-                if (now > abs_deadline) {
-                    struct FaultEvent* fault;
-                    fault = bpf_ringbuf_reserve(&fault_ringbuf, sizeof(*fault), 0);
-                    if (fault) {
-                        fault->fault_type = FAULT_DMISS;
-                        fault->task_id_hash = meta->task_id_hash;
-                        fault->workload_id_hash = meta->workload_id_hash;
-                        fault->cpu = bpf_get_smp_processor_id();
-                        fault->expected_deadline_ns = abs_deadline;
-                        fault->actual_completion_ns = now;
-                        bpf_ringbuf_submit(fault, 0);
-                    }
-                    meta->activation_ns = 0;  // Clear to avoid duplicate faults
-                }
-            }
-
-            /* If budget exhausted, emit BUDGET_EXCEED fault */
-            if (cbs->remaining_us == 0) {
-                if (cbs->period_us > 0) {
-                    __u64 period_ns = (__u64)cbs->period_us * 1000ULL;
-
-                    if (cbs->replenish_at_ns == 0) {
-                        cbs->replenish_at_ns = now + period_ns;
-                    } else if (now >= cbs->replenish_at_ns) {
-                        __u64 elapsed = now - cbs->replenish_at_ns;
-                        __u64 periods = elapsed / period_ns + 1;
-
-                        cbs->replenish_at_ns += periods * period_ns;
-                    }
-                }
-                struct FaultEvent* fault;
-                fault = bpf_ringbuf_reserve(&fault_ringbuf, sizeof(*fault), 0);
-                if (fault) {
-                    fault->fault_type = FAULT_BUDGET_EXCEED;
-                    fault->task_id_hash = meta->task_id_hash;
-                    fault->workload_id_hash = meta->workload_id_hash;
-                    fault->cpu = bpf_get_smp_processor_id();
-                    fault->expected_deadline_ns = cbs->replenish_at_ns;
-                    bpf_ringbuf_submit(fault, 0);
-                }
-            }
+            /* Transitional deadline check, once per execution interval */
+            if (job_fsm_legacy_deadline_missed(meta, cbs->deadline_us, now))
+                emit_l2_fault(meta, FAULT_DMISS,
+                              meta->activation_ns +
+                                  (__u64)cbs->deadline_us * CBS_NS_PER_US,
+                              now);
         }
     }
 
     if (meta->scheduling_type == SCHED_TYPE_TT && !runnable)
         mark_tt_not_runnable(meta, bpf_get_smp_processor_id());
+}
+
+/* A voluntary sleep ends the execution interval of an L2 task. Dequeues for
+ * other reasons (attribute change, migration) do not. */
+SEC("struct_ops/quiescent")
+void BPF_PROG(quiescent, struct task_struct* p, u64 deq_flags)
+{
+    __u32 pid = p->pid;
+    struct TaskMeta* meta;
+
+    if (!(deq_flags & SCX_DEQ_SLEEP))
+        return;
+
+    meta = bpf_map_lookup_elem(&task_meta_map, &pid);
+    if (!meta || meta->scheduling_type != SCHED_TYPE_CBS)
+        return;
+
+    job_fsm_on_quiescent(meta);
 }
 
 /* fentry instead of a syscall tracepoint, which slows every syscall system-wide */
@@ -483,10 +505,12 @@ struct sched_ext_ops timpani_ops = {.flags = SCX_OPS_SWITCH_PARTIAL,
                                     .init = (void*)init,
                                     .init_task = (void*)init_task,
                                     .select_cpu = (void*)select_cpu,
+                                    .runnable = (void*)runnable,
                                     .enqueue = (void*)enqueue,
                                     .dispatch = (void*)dispatch,
                                     .running = (void*)running,
                                     .stopping = (void*)stopping,
+                                    .quiescent = (void*)quiescent,
                                     .name = "timpani"};
 
 char _license[] SEC("license") = "Dual MIT/GPL";
