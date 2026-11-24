@@ -273,6 +273,15 @@ target_include_directories(timpani-n
     PUBLIC ${CMAKE_BINARY_DIR}
 )
 
+# Host unit tests (GoogleTest). Here they build with the daemon and need its
+# whole toolchain. tests/ also configures on its own, without the BPF and gRPC
+# toolchains: see tests/CMakeLists.txt.
+option(BUILD_TESTS "Build unit tests" OFF)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
     # ============================================================================
     # Installation
     # ============================================================================
