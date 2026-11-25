@@ -159,7 +159,18 @@ live SHM object는 수명 동안 고정 크기다. `Timpani-N`은 full-layout ma
   int ttsched_wait_data(uint32_t *job_token);         /* 실제 dispatch wake만 0, FIFO 순차 소비 (O_RDONLY 가능) */
   int ttsched_signal_ready(uint32_t job_token);       /* 같은 job의 완료 commit (O_RDWR 필요) */
   ```
-- 신규 API는 실패 시 `-1`과 `errno`를 반환한다: `EACCES`(write 권한 없음), `ENOTSUP`(legacy/짧은 mapping 또는 extension magic은 유효하지만 미지원 ABI version), `EINVAL`(NULL/잘못된 인자, `< 784B` 초기화 실패 후 호출, extension magic/ABI size, Source-role/release-state/L1 대상 `release_source` 오호출 또는 outgoing-edge metadata 오류), `ESTALE`(종료/교체로 인한 `magic=0`/`WRITER_PENDING`/`instance_id` 변경, publish/control wake, 바인딩 세대 불일치 또는 Successor의 활성 ready sequence와 다른 job token), `EALREADY`(활성 job token의 같은 선행 비트가 이미 commit됨), `EAGAIN`(commit contention 또는 Source release가 아직 stamp되지 않음), `ENOENT`(호출자 자신의 Task 슬롯 미존재 또는 `ttsched_release_source()` 대상 Task 슬롯 미존재)다.
+- 신규 API는 실패 시 `-1`과 `errno`를 반환한다: `EACCES`(write 권한
+  없음), `ENOTSUP`(legacy/짧은 mapping 또는 extension magic은 유효하지만
+  미지원 ABI version), `EINVAL`(NULL/잘못된 인자, `< 784B` 초기화 실패 후
+  호출, extension magic/ABI size, 호출자 이름·슬롯 신원 불일치,
+  Source-role/release-state/L1 대상 `release_source` 오호출 또는
+  outgoing-edge metadata 오류), `ESTALE`(종료/교체로 인한
+  `magic=0`/`WRITER_PENDING`/`instance_id` 변경, publish/control wake,
+  바인딩 세대 불일치 또는 Successor의 활성 ready sequence와 다른 job
+  token), `EALREADY`(활성 job token의 같은 선행 비트가 이미 commit됨),
+  `EAGAIN`(commit contention 또는 Source release가 아직 stamp되지 않음),
+  `ENOENT`(호출자 자신의 Task 슬롯 미존재 또는
+  `ttsched_release_source()` 대상 Task 슬롯 미존재)다.
 - **Sink 태스크의 `ttsched_signal_ready()` 호출 규약**: `num_out_edges == 0`인 Sink 태스크가 완료 직후 관행적으로 `ttsched_signal_ready(job_token)`를 호출할 경우, 쓰기 권한·SHM ABI/세대·`n_tasks`·자기 슬롯 신원(`atomic_name_equals(tasks[g_task_idx].name, g_my_name)`)을 정상 검증한 뒤 outgoing-edge 변경 없이 `0`(안전한 no-op)을 반환한다. 단, `O_RDONLY` 매핑 Sink는 `signal_ready()`를 호출하지 않으며 호출 시 `EACCES`를 반환한다.
 - `ttsched_signal_ready()`는 첫 `ready_state` 변경 전에 제한된 stack plan에 전체 outgoing-edge 목록을 snapshot·검증한다. 검증 대상은 `n_tasks`, `num_out_edges`, `dst_slot_idx`, self/중복 destination, `bit_idx`, `required_mask` 하위 16비트 유효성 및 소속, `trigger_mode`, `execution_model`, 각 destination의 token/중복 bit 상태다. 어느 edge에서라도 실패하면 predecessor mask, dispatch counter, futex wake가 하나도 바뀌지 않은 채 `-1`을 반환하며, CBS dispatch counter와 wake는 모든 edge CAS가 끝나거나 동시 동일 호출에 의해 완료된 뒤에만 수행한다.
 - **공통 `job_token` 도메인 및 호출 시점 규약**: Phase 0에서 `job_token`은 현재 `ready_sequence`에 대응하는 32비트 논리 activation ordinal이며 timestamp나 Task-local 호출 횟수가 아니다. L1 Source는 `Timer Master`가 `start()` 시점에 모든 CPU 스레드가 공유하는 단일 `base_cycle_start`를 확정한 뒤 Source별 파이프라인 주기 단위 activation ordinal `k`(`0, 1, 2, ...`, 슬롯 발화마다 `+1`)를 stamp하고, L2 CBS Source는 `O_RDWR`(`timpani-pub`) 권한의 이벤트 어댑터/시험 생성기가 `ttsched_release_source(task_name, k)`(`required_mask == 0 && num_out_edges > 0 && execution_model == TIMPANI_EXEC_CBS` 검증)로 `k`를 stamp한 뒤 기존 이벤트 경로로 Task를 깨운다. 같은 고정 주기 `H` Pipeline의 L1/L2 Source는 **활성화 직후** `ttsched_current_job_token(&token)`을 1회 호출해 이 release snapshot을 읽고 처리 완료 후 `ttsched_signal_ready(token)`에 전달한다(`wake_delay < Source_period` 전제). `origin_epoch_ns`, `hyperperiod_us`, `CLOCK_REALTIME` 또는 앱-local counter로 token을 다시 계산해서는 안 되며, release 표식이 없는 상태에서 `current_job_token()`을 호출하면 상태 변경 없이 `EAGAIN`을 반환한다. Successor는 `ttsched_wait_data(&token)`이 FIFO 순차로 반환한 `token`을 그대로 다음 단계 `ttsched_signal_ready(token)`에 전달한다. Harmonic 주기-token 매핑은 Phase 1에서 정의한다.
@@ -326,16 +337,26 @@ static inline int pipeline_commit_alive(
     return 0;
 }
 
-/* seqlock 및 RT 경로 전용 16바이트 원자 이름 비교/저장 (C11 데이터 경합 방지) */
+/* RT 경로용 16바이트 NUL padding 정확 비교. */
 static inline int atomic_name_equals(const volatile char slot_name[16],
-                                     const char expected[16])
+                                     const char* expected)
 {
-    char local[16];
+    char actual[16];
+    char wanted[16] = {};
+    size_t expected_len = 0U;
+
     for (size_t i = 0; i < 16; i++) {
-        local[i] = __atomic_load_n(&slot_name[i], __ATOMIC_RELAXED);
+        actual[i] = __atomic_load_n(&slot_name[i], __ATOMIC_RELAXED);
     }
-    local[15] = '\0';
-    return strncmp(local, expected, 15) == 0;
+    if (!expected)
+        return 0;
+    while (expected_len < 16U && expected[expected_len] != '\0') {
+        expected_len++;
+    }
+    if (expected_len == 0U || expected_len >= 16U)
+        return 0;
+    memcpy(wanted, expected, expected_len);
+    return memcmp(actual, wanted, sizeof(actual)) == 0;
 }
 
 static inline void atomic_name_store(volatile char slot_name[16],
@@ -1304,6 +1325,7 @@ TT/CBS entry 자체에는 dependency를 중복하지 않는다. O→N DAG metada
 | N 와이어 등록 | `(workload_id_hash, task_id_hash)` 쌍이 정확히 하나의 TT/CBS entry와 연결되고 클래스가 바뀌지 않으며, `ExecutionModel.DATA_FLOW = 2` 수신 시 `EINVAL`로 거절한다. `TimerMaster::set_schedule_table()` 오버로드로 CBS/Pipeline 엔트리가 `tasks[]`/`pipeline[]`에 동일 인덱스로 등록된다 |
 | N 내부 빌더 bijection (fault-injection) | 게시 직전 N 내부 빌더 출력에 대해 선행 2개 Successor의 bit `0`, `1` 및 `required_mask=0b11` 정상 후보는 승인한다. 별도 fault-injection 단위 시험으로 `n_tasks` 범위, `dst == src`, 두 incoming edge가 모두 bit `0`, 세 번째 edge 없이 mask `0b111`, mask 밖 edge bit, 상위 16비트 오염(`0x10003`)을 주입해 거절 및 committed candidate/active SHM 불변을 확인한다 |
 | SHM ABI 및 초기화 | 기존 `void ttsched_init()` 시그니처를 유지하며 비RT `fstat() < 784B` 시 `g_shm_init_errno = EINVAL`로 후속 Pipeline API가 `EINVAL`을 반환하고 재초기화 실패 시 `g_shm_mapping = {NULL, 0}`으로 double-`munmap`이 없다. 784B legacy/짧은 매핑에서는 TT API만 동작(`ttsched_wait_next_period()` `g_shm_map_size` `munmap`)하고 Pipeline API는 extension 접근 없이 `ENOTSUP`; magic/ABI-size 불일치 `EINVAL`, magic이 유효한 미지원 version은 `ENOTSUP`; `mmap()` 직후 fd 즉시 close 및 스레드 종료 시 `pthread_key` destructor로 `munmap` 누수 `0`건 확인 |
+| Task 이름 정확 일치 | `task`와 `task2`라는 서로 다른 슬롯이 있을 때 `find_task_slot("task")`는 `task`만 선택하고, `find_task_slot("task3")`는 `task`/`task2` prefix에 묶이지 않고 `-1`을 반환한다. 기존에 묶인 슬롯 이름이 다른 유효 이름으로 바뀌면 `atomic_name_equals()` 재검증은 `EINVAL`을 반환한다. 16바이트 안에 NUL이 없거나 빈 이름이거나 종료 NUL 뒤에 0이 아닌 바이트가 있는 슬롯은 malformed로 간주해 유효 expected name과 일치하지 않는다 |
 | 무-VFS 교체/종료 감지 | RT 경로(`release_source`, `signal_ready`, `wait_data`, `current_job_token`, `Timer Master`)에서 `shm_open`/`fstat`/`close` 호출 `0`회 및 16바이트 원자 이름 비교(`atomic_name_equals`/`atomic_name_store`, TSAN 경합 `0`건) 확인. 동일 SHM 내 세대 전환(`g → g+2`) 시 암묵 채택 없이 `signal_ready`/`wait_data`/`current_job_token`/`release_source` 모두 즉시 `ESTALE`을 반환한다. Safe Abandonment(`WRITER_PENDING` 유지 + `shm->magic=0` + `pipeline_header.magic=0` + `tasks[]`/`pipeline[]` `FUTEX_WAKE(INT_MAX)` + `shm_unlink` + `O_CREAT|O_EXCL` 신규 `instance_id`) 또는 `instance_id` 변경 시 기존 매핑의 RT 호출은 새 `pipeline[]`에 접근하거나 실행하지 않고 `ESTALE`을 반환하며, 비RT `ttsched_init()` 재초기화 후 새 객체에 정상 연결됨을 확인한다. writer를 CAS/wake 직전에 50 ms 이상 pause하고 old object가 abandon된 뒤 resume시키면 신 object 변경 `0`, old consumer 실행 `0`, old API `ESTALE`이어야 한다. 마지막 재검증 직후 pause/resume race에서 old object late CAS/wake 자체는 허용하되 active generation에 영향을 주지 않는다 |
 | 권한 및 읽기 전용 seqlock | Pipeline writer의 `O_RDWR` 실패는 `EACCES`, `O_RDONLY`(`PROT_READ`) Successor의 `ttsched_wait_data()` 및 `ttsched_current_job_token()`은 `publication_guard` 쓰기·`SIGSEGV` 없이 성공, `O_RDONLY`의 `ttsched_signal_ready()`·`ttsched_release_source()`는 `EACCES`. `O_RDWR` Sink(`num_out_edges == 0`)의 `signal_ready()`는 신원 검증 후 no-op `0` 반환. 배포 manifest에서 `timpani-pub` member가 신뢰 writer 목록과 일치하고 비신뢰 workload가 RO group에만 속하는지 검증한다. RW writer의 다른 slot/header 임의 변경 격리는 Phase 0 보장으로 시험하지 않는다 |
 | 공통 `job_token` 취득 | L1 Source(`Timer Master` 단일 `base_cycle_start`, Source별 `src_ordinal++`) 또는 L2 CBS Source(`ttsched_release_source()`, `TIMPANI_EXEC_CBS` 강제·L1 대상 호출 시 `EINVAL` 거절)가 `make_source_release_state(k)`를 stamp한 경우에만 `ttsched_current_job_token()`이 `k`를 반환한다. release-invalid 상태는 `EAGAIN`, Source가 아닌 slot이나 손상 state는 `EINVAL`, 세대 변경 중에는 `ESTALE`이다. `wake_delay < Source_period` 범위에서 앱 wake를 Hyperperiod 경계 뒤로 미루거나(`offset=80ms` → `105ms`) `CLOCK_REALTIME`을 forward/backward로 변경해도 반환 token과 downstream `ready_sequence`는 변하지 않는다. 32비트 activation ordinal의 `0xFFFFFFFF → 0` 경계는 wrap 비교 규칙과 동일하게 Source/Successor 모두 같은 cycle에 매핑되어야 한다 |

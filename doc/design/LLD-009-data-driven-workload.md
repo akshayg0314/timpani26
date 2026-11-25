@@ -159,7 +159,20 @@ The `publication_guard` in the extension header closes the TOCTOU window between
   int ttsched_wait_data(uint32_t *job_token);         /* Return 0 only for a real dispatch wake; consume FIFO-sequentially (O_RDONLY allowed) */
   int ttsched_signal_ready(uint32_t job_token);       /* Commit completion of the same job (O_RDWR required) */
   ```
-- New APIs return `-1` with `errno` on failure: `EACCES` (no write permission); `ENOTSUP` (a legacy/short mapping or an unsupported ABI version with valid extension magic); `EINVAL` (a NULL/invalid argument, a call after initialization failed for `< 784B`, invalid extension magic/ABI size, a `release_source` misuse against the Source role/release state/L1 target, or invalid outgoing-edge metadata); `ESTALE` (termination/replacement causing `magic=0`/`WRITER_PENDING`/an `instance_id` change, a publication/control wake, a bound-generation mismatch, or a job token different from the Successor's active ready sequence); `EALREADY` (the same predecessor bit was already committed for the active job token); `EAGAIN` (commit contention or the Source release has not yet been stamped); and `ENOENT` (the caller's own Task slot is absent or the Task slot targeted by `ttsched_release_source()` is absent).
+- New APIs return `-1` with `errno` on failure: `EACCES` (no write
+  permission); `ENOTSUP` (a legacy/short mapping or an unsupported ABI
+  version with valid extension magic); `EINVAL` (a NULL/invalid argument, a
+  call after initialization failed for `< 784B`, invalid extension magic/ABI
+  size, a caller-name/slot identity mismatch, a `release_source` misuse
+  against the Source role/release state/L1 target, or invalid outgoing-edge
+  metadata); `ESTALE` (termination/replacement causing
+  `magic=0`/`WRITER_PENDING`/an `instance_id` change, a publication/control
+  wake, a bound-generation mismatch, or a job token different from the
+  Successor's active ready sequence); `EALREADY` (the same predecessor bit
+  was already committed for the active job token); `EAGAIN` (commit
+  contention or the Source release has not yet been stamped); and `ENOENT`
+  (the caller's own Task slot is absent or the Task slot targeted by
+  `ttsched_release_source()` is absent).
 - **Calling convention for `ttsched_signal_ready()` from a Sink Task**: If a Sink Task with `num_out_edges == 0` conventionally calls `ttsched_signal_ready(job_token)` immediately after completion, return `0` (a safe no-op) after normally validating write permission, SHM ABI/generation, `n_tasks`, and the caller's own slot identity (`atomic_name_equals(tasks[g_task_idx].name, g_my_name)`), without changing any outgoing edge. A Sink mapped as `O_RDONLY`, however, SHALL NOT call `signal_ready()`; if it does, return `EACCES`.
 - Before the first `ready_state` modification, `ttsched_signal_ready()` snapshots and validates the entire outgoing-edge list in a bounded stack plan. Validation covers `n_tasks`, `num_out_edges`, `dst_slot_idx`, self/duplicate destinations, `bit_idx`, validity and membership of the lower 16 bits of `required_mask`, `trigger_mode`, `execution_model`, and each destination's token/duplicate-bit state. A failure in any edge returns `-1` with no predecessor mask, dispatch counter, or futex wake changed; the CBS dispatch counter and wake are performed only after all edge CAS operations have completed or have been completed by an identical concurrent call.
 - **Common `job_token` domain and calling-time convention**: In Phase 0, `job_token` is the 32-bit logical activation ordinal corresponding to the current `ready_sequence`; it is neither a timestamp nor a Task-local call count. An L1 Source is stamped with a Source-specific activation ordinal `k` (`0, 1, 2, ...`, `+1` per slot firing) for its pipeline cycle after `Timer Master` establishes the single `base_cycle_start` shared by all CPU threads at `start()`. For an L2 CBS Source, an event adapter/test generator with `O_RDWR` (`timpani-pub`) permission stamps `k` through `ttsched_release_source(task_name, k)` (validated as `required_mask == 0 && num_out_edges > 0 && execution_model == TIMPANI_EXEC_CBS`) and then wakes the Task through the existing event path. **Immediately after activation**, each L1/L2 Source in the same fixed-period `H` Pipeline calls `ttsched_current_job_token(&token)` once to read this release snapshot and, after processing completes, passes it to `ttsched_signal_ready(token)` (assuming `wake_delay < Source_period`). The token SHALL NOT be recomputed from `origin_epoch_ns`, `hyperperiod_us`, `CLOCK_REALTIME`, or an app-local counter; calling `current_job_token()` without a release marker returns `EAGAIN` without changing state. A Successor passes the `token` returned in FIFO order by `ttsched_wait_data(&token)` unchanged to the next `ttsched_signal_ready(token)`. Harmonic period-to-token mapping is defined in Phase 1.
@@ -331,16 +344,26 @@ static inline int pipeline_commit_alive(
     return 0;
 }
 
-/* 16-byte atomic name comparison/storage for seqlock and RT paths (prevents C11 data races) */
+/* Exact, 16-byte NUL-padded atomic name comparison for RT paths. */
 static inline int atomic_name_equals(const volatile char slot_name[16],
-                                     const char expected[16])
+                                     const char* expected)
 {
-    char local[16];
+    char actual[16];
+    char wanted[16] = {};
+    size_t expected_len = 0U;
+
     for (size_t i = 0; i < 16; i++) {
-        local[i] = __atomic_load_n(&slot_name[i], __ATOMIC_RELAXED);
+        actual[i] = __atomic_load_n(&slot_name[i], __ATOMIC_RELAXED);
     }
-    local[15] = '\0';
-    return strncmp(local, expected, 15) == 0;
+    if (!expected)
+        return 0;
+    while (expected_len < 16U && expected[expected_len] != '\0') {
+        expected_len++;
+    }
+    if (expected_len == 0U || expected_len >= 16U)
+        return 0;
+    memcpy(wanted, expected, expected_len);
+    return memcmp(actual, wanted, sizeof(actual)) == 0;
 }
 
 static inline void atomic_name_store(volatile char slot_name[16],
@@ -1315,6 +1338,7 @@ Unit tests SHALL verify that the DAG is processed without inferring an execution
 | N wire registration | The `(workload_id_hash, task_id_hash)` pair is connected to exactly one TT/CBS entry and the class is unchanged; receipt of `ExecutionModel.DATA_FLOW = 2` is rejected with `EINVAL`. The `TimerMaster::set_schedule_table()` overload registers CBS/Pipeline entries at the same index in `tasks[]` and `pipeline[]`. |
 | N-internal builder bijection (fault injection) | Immediately before publication, accept a normal N-internal builder output for a Successor with two predecessors represented by bits `0` and `1` and `required_mask=0b11`. In separate fault-injection unit tests, inject an out-of-range `n_tasks`, `dst == src`, two incoming edges both on bit `0`, mask `0b111` without a third edge, an edge bit outside the mask, and upper-16-bit contamination (`0x10003`); verify rejection and immutability of the committed execution candidate/active SHM. |
 | SHM ABI and initialization | Retain the existing `void ttsched_init()` signature. For non-RT `fstat() < 784B`, `g_shm_init_errno = EINVAL` and a subsequent Pipeline API returns `EINVAL`; after failed reinitialization, `g_shm_mapping = {NULL, 0}` prevents a double `munmap`. On a 784B legacy/short mapping, only the TT API works (`ttsched_wait_next_period()` uses `g_shm_map_size` for `munmap`), and Pipeline APIs return `ENOTSUP` without accessing the extension. A magic/ABI-size mismatch returns `EINVAL`; unsupported versions with valid magic return `ENOTSUP`. Verify that the fd closes immediately after `mmap()` and that the `pthread_key` destructor has 0 `munmap` leaks when a thread terminates. |
+| Exact Task-name identity | Given distinct slots named `task` and `task2`, `find_task_slot("task")` selects only `task`, and `find_task_slot("task3")` returns `-1` rather than binding the `task`/`task2` prefix. If a previously bound slot is replaced by another valid name, the `atomic_name_equals()` recheck returns `EINVAL`. A slot with no NUL in 16 bytes, an empty name, or nonzero bytes after the terminating NUL is malformed and cannot match a valid expected name. |
 | VFS-free replacement/shutdown detection | Verify 0 calls to `shm_open`/`fstat`/`close` on the RT paths (`release_source`, `signal_ready`, `wait_data`, `current_job_token`, and `Timer Master`) and the 16-byte atomic name comparisons (`atomic_name_equals`/`atomic_name_store`, with 0 TSAN races). On a generation transition within the same SHM (`g → g+2`), every one of `signal_ready`/`wait_data`/`current_job_token`/`release_source` returns `ESTALE` immediately without implicit adoption. For Safe Abandonment (`WRITER_PENDING` retained + `shm->magic=0` + `pipeline_header.magic=0` + `FUTEX_WAKE(INT_MAX)` on `tasks[]`/`pipeline[]` + `shm_unlink` + `O_CREAT|O_EXCL` with a new `instance_id`) or an `instance_id` change, RT calls through the old mapping return `ESTALE` without accessing or executing the new `pipeline[]`; verify normal reconnection to the new object after non-RT `ttsched_init()` reinitialization. Pause a writer immediately before a CAS/wake for at least 50 ms, abandon the old object, and resume it: require 0 new-object modifications, 0 executions by old consumers, and an old-API `ESTALE`. In the pause/resume race immediately after the last revalidation, a late CAS/wake on the old object itself is allowed but MUST NOT affect the active generation. |
 | Permissions and read-only seqlock | An `O_RDWR` failure for a Pipeline writer returns `EACCES`; an `O_RDONLY` (`PROT_READ`) Successor's `ttsched_wait_data()` and `ttsched_current_job_token()` succeed without a `publication_guard` write or `SIGSEGV`; and `ttsched_signal_ready()`/`ttsched_release_source()` on `O_RDONLY` return `EACCES`. After identity validation, `signal_ready()` from an `O_RDWR` Sink (`num_out_edges == 0`) returns no-op `0`. Verify in the deployment manifest that `timpani-pub` members match the trusted-writer list and untrusted workloads belong only to the RO group. Do not test isolation against arbitrary modification of another slot/header by an RW writer as a Phase 0 guarantee. |
 | Common `job_token` acquisition | Only when an L1 Source (`Timer Master` with a single `base_cycle_start` and Source-specific `src_ordinal++`) or an L2 CBS Source (`ttsched_release_source()`, enforcing `TIMPANI_EXEC_CBS` and rejecting calls for an L1 target with `EINVAL`) has stamped `make_source_release_state(k)` does `ttsched_current_job_token()` return `k`. A release-invalid state returns `EAGAIN`, a non-Source slot or corrupt state returns `EINVAL`, and a generation change returns `ESTALE`. Within `wake_delay < Source_period`, shifting an app wake behind the Hyperperiod boundary (`offset=80ms` → `105ms`) or moving `CLOCK_REALTIME` forward/backward does not change the returned token or downstream `ready_sequence`. Across the 32-bit activation ordinal boundary `0xFFFFFFFF → 0`, the Source and Successor map to the same cycle under the wrap-comparison rule. |
