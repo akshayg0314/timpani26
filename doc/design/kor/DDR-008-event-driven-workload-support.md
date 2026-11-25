@@ -179,7 +179,7 @@ int ttsched_evt_done(int outcome);                              /* 워커: Job �
 | (vi) eventfd 기반 통지 | 표준 fd | fd 전달 필요, futex보다 지연 큼 | 기각 |
 | (vii) 이름 기반 signal과 반환값 없는 wait (이전 초안) | 호출 단순 | 처리 중 도달을 표현하지 못함. 호출마다 이름 탐색 | 기각 |
 
-**결과**: `libttsched.h`의 소비자(timpani-n, sample-apps, 외부 TT 앱)는 재컴파일이 필요하다(ABI 단절, DDR-011 §1.1과 같은 유형). `timpani_rt_shm.h`와 `/timpani_rt`는 폐기한다. OI-15의 결정(게시 주체 범위)은 유지하며, 쓰기 권한 축소와 프로세스 간 정책은 P2다.
+**결과**: `libttsched.h`의 소비자(timpani-n, sample-apps, 외부 TT 앱)는 재컴파일이 필요하다(ABI 단절). `timpani_rt_shm.h`와 `/timpani_rt`는 폐기한다. OI-15의 결정(게시 주체 범위)은 유지하며, 쓰기 권한 축소와 프로세스 간 정책은 P2다.
 
 ---
 
@@ -631,7 +631,7 @@ P2에서 키를 절대 마감으로 바꿔 **EDF**로 전환하고, 수용식을
 - TT 슬롯이 없는 CPU의 TT 점유는 0이며 가용 Gap은 전체 시간이다. D-09에서 `B_tt(k, D) = 0`으로 검사한다. CPU별 L2 수 제한과 다른 서버 간섭·이용률 검사는 유지한다.
 - CBS 보충은 서버별 `T_s`와 D-04/D-07의 윈도우·재스케줄 유발로 동작한다. TT_START/TT_END가 발생해야 보충·dispatch되는 의존성을 두지 않는다.
 - **CBS 실행은 hyperperiod 값을 읽지 않도록 설계한다.** 보충은 서버별 `T_s`, dispatch와 마감 감시는 절대 시각을 쓴다. MIT는 도달 제약이고 `T_s`는 보충 주기다. MIT의 LCM이나 임의 기본값으로 TT hyperperiod를 만들지 않는다. 이는 설계 분석 결과이며 P1 검증(AC-008-17, AC-008-18)으로 확인할 대상이다. Weekly 항목 1-f의 후속 답변은 hyperperiod의 필요 여부를 먼저 확인하자는 것이었고, 회의 결정은 아니다.
-- 테이블 필드 `hyperperiod_us`는 기준이 [SRS-008 FR-O-015](SRS-008-event-driven-workload-support.md)다. TT가 없는 노드도 0이 아닌 정의된 값을 쓴다(LLD 후보 `DEFAULT_HP_US`, 10 ms). 이 값은 테이블 형식 값이며 CBS 실행 파라미터가 아니다. 현행 코드는 TT가 없고 태스크가 있는 노드의 테이블에 0을 쓴다(`global_scheduler.cpp` 109, 140, 493행). 이는 FR-O-015 미충족이며 REQ-008 §10-16의 선행 버그다. 표현을 바꿀지(0 허용 등), 갱신 적용 시점, TT 최초 추가·최종 제거의 경계는 미결이다(OI-25, [DDR-011 §1.2](DDR-011-runtime-table-update.md#12-2026-11-12-weekly-연계-검토--제안미구현)). 이 결정은 필드 변경 승인이 아니다.
+- 테이블 필드 `hyperperiod_us`는 기준이 [SRS-008 FR-O-015](SRS-008-event-driven-workload-support.md)다. TT가 없는 노드도 0이 아닌 정의된 값을 쓴다(LLD 후보 `DEFAULT_HP_US`, 10 ms). 이 값은 테이블 형식 값이며 CBS 실행 파라미터가 아니다. 현행 코드는 TT가 없고 태스크가 있는 노드의 테이블에 0을 쓴다(`global_scheduler.cpp` 109, 140, 493행). 이는 FR-O-015 미충족이며 REQ-008 §10-16의 선행 버그다. 표현을 바꿀지(0 허용 등), 갱신 적용 시점, TT 최초 추가·최종 제거의 경계는 미결이다(OI-25). DDR-011 Phase 0은 L1 TT 갱신만 다루므로 이 항목은 [DDR-011 Phase 1](DDR-011-runtime-table-update.md#10-이관과-검토-게이트)에서 함께 정한다. 이 결정은 필드 변경 승인이 아니다.
 - **P1 검증(CBS-007, AC-008-17, AC-008-18):** TT 없는 노드와 혼합 노드의 TT 없는 CPU에서 첫 Event 처리, 유휴 후 재도달, 예산 소진 후 백업 보충을 확인한다. TT 추가·제거가 기존 CBS 예산과 미완료 Job을 초기화하거나 마감을 바꾸지 않는지 검사한다.
 
 ### D-23. 마감 실패 사실과 원인·복구 정책의 분리 — P2
@@ -717,7 +717,7 @@ P2에서 키를 절대 마감으로 바꿔 **EDF**로 전환하고, 수용식을
 - **OI-9 PoC**(F-1)와 **DDR-007 정합**(F-2).
 - **L2 `runtime`(C) 측정·여유율**(OI-23): Job당 CPU 수요의 실측 절차, 입력 커버리지·유휴 뒤 첫 Job·간섭 등 측정 조건과 선언 여유율을 합의한다(HLD-008 §8.2, H-19). `budget_used_us`는 실행 구간 단위이므로 블로킹하는 한 Job이 여러 구간으로 나뉘거나 연속 Job들이 한 구간에 합쳐질 수 있어 Job당 C로 직접 간주하지 않는다. 실측 최댓값은 최악 실행 시간의 증명이 아니다. 예산 집행은 C 과소 추정으로 인한 CPU 간섭을 제한하지만, 다른 태스크의 마감 보호는 D-09의 수용 가정과 초과 실행 상한이 성립하는 범위에 한정되며 공유 자원·데이터 영향의 격리를 뜻하지 않는다.
 - **재바인딩 경계의 재게시 `t_arr`·중복 처리 책임**(OI-24): 같은 입력을 다시 post하면 새 `gen`의 별개 Event가 된다(D-17, D-19). 원래 도달 시각 유지와 재게시 시각 사용 중 어느 기준을 적용할지, 중복 처리 방지 책임을 어디에 둘지 계약으로 확정해야 한다(HLD-008 §8.1, H-20). 같은 D에서 원래 시각은 재연결 지연을 포함한 마감을 유지하지만 재게시 시각은 마감을 뒤로 옮긴다. D가 바뀌면 원래 시각을 써도 새 설정으로 마감을 계산하므로 이전 Event와 같은 마감은 아니다.
-- **TT 없는 테이블의 `hyperperiod_us` 표현과 갱신 경계**(D-22, OI-25): 표현(FR-O-015의 0이 아닌 값 유지, 또는 0·부재 허용)과 TT 최초 추가·최종 제거 때의 갱신 경계를 구현 전에 합의한다. 이 항목은 테이블 검증, Timer Master, 갱신 계약에 영향을 준다. 상세는 [DDR-011 §1.2](DDR-011-runtime-table-update.md#12-2026-11-12-weekly-연계-검토--제안미구현)를 본다.
+- **TT 없는 테이블의 `hyperperiod_us` 표현과 갱신 경계**(D-22, OI-25): 표현(FR-O-015의 0이 아닌 값 유지, 또는 0·부재 허용)과 TT 최초 추가·최종 제거 때의 갱신 경계를 구현 전에 합의한다. 이 항목은 테이블 검증, Timer Master, 갱신 계약에 영향을 준다. DDR-011 Phase 0은 고정 E/H에서 L1 TT 갱신만 다루고 CBS 갱신은 Phase 1로 넘기므로, 이 항목은 [DDR-011 Phase 1](DDR-011-runtime-table-update.md#10-이관과-검토-게이트) 검토의 입력이다.
 
 ---
 
@@ -738,7 +738,7 @@ P2에서 키를 절대 마감으로 바꿔 **EDF**로 전환하고, 수용식을
 | 1-c CBS 정책과 Timer Master 선점 | CBS는 SCHED_EXT, Timer Master는 SCHED_FIFO. DEADLINE 계층·fair server 간섭을 P1 측정 전제로 확인 | Timer Master를 SCHED_DEADLINE으로 바꾸는 결론 없음. 근본 대책은 커널·플랫폼 조사 | DDR-005의 실행 환경 보충, DDR-006 §4 |
 | 1-d DMISS 원인 정보 | 기존 기본 관측·통계 유지 | **P2:** TT/CBS 기록 상관 분석, 원인 분류·지능형 분석·원인별 자동 복구 | D-23, D-10/D-16, DDR-012 |
 | 1-e 앱의 TIMPANI 의존성 | 어댑터·래퍼로 의존성 국소화, 명시적 Event/Job 연결 유지 | 앱 완전 무수정·자동 추론은 조사 대상 | D-24 |
-| 1-f TT 없는 CBS 실행 | P1 필수. 보충·dispatch·감시는 TT와 독립이고 hyperperiod 값을 쓰지 않음(설계 속성, AC-008-17로 확인 대상) | 테이블 필드는 FR-O-015 기준. 표현 변경(0 허용 등)과 갱신 경계는 미결(OI-25) | D-22, DDR-011 §1.2 |
+| 1-f TT 없는 CBS 실행 | P1 필수. 보충·dispatch·감시는 TT와 독립이고 hyperperiod 값을 쓰지 않음(설계 속성, AC-008-17로 확인 대상) | 테이블 필드는 FR-O-015 기준. 표현 변경(0 허용 등)과 갱신 경계는 미결(OI-25) | D-22, DDR-011 §10(Phase 1) |
 | 1-g L1→L2 데이터 파이프라인 | Radar L1→Event→FCW L2를 P1 연결 예제로 검증 가능. 기존 L1/L2 분류는 유지 | 전체 파이프라인의 E2E 마감·관측·노드 간 보장은 DDR-009 주제이며 008 P1 보장 밖. 현재 체크아웃에 DDR-009 정본 없음 | HLD-008 §8, 향후 DDR-009 |
 | 2 vsomeip 정책·CPU 이동 실패 | PID/TID·cgroup·effective cpuset·정책·online CPU·컨테이너 설정 증거 수집. 환경 검증은 P1 | 무조건 FIFO 승격·root로 제약 우회 금지. 시스템 배포 구성의 소관 | D-24, DDR-003 §2 |
 
@@ -814,7 +814,7 @@ P2에서 키를 절대 마감으로 바꿔 **EDF**로 전환하고, 수용식을
 | DDR-005 | User App Interface: L2의 `ttsched_wait_next_period` 필수를 D-14대로 개정. 워커의 `ttsched_evt_wait/done` 쌍(D-18). TaskMeta 확장과 `bind_gen`. DSQ 레이아웃(CPU별) 갱신 |
 | DDR-006 | RT 스레드 표에 Replenisher와 DeadlineMonitor 추가(DDR-007 §10 예고 사항 실현). 두 스레드 모두 gRPC와 할당 금지 |
 | DDR-007 | §4.5 보충 의미론을 활성화 기준 윈도우로(D-04), §4.5.3 Backup 필수화(상태는 BPF만 갱신, D-07), §4.2 DSQ 레이아웃 CPU별, §7 Fault 표에 MIT_VIOLATION(도달 기준 원천, D-10) |
-| DDR-011 | P1 영향 없음. P2 증분 갱신 시 개정 |
+| DDR-011 | Phase 0(L1 TT 갱신, 고정 E/H)은 008 P1에 영향 없음. CBS 갱신과 TT 없는 테이블(OI-25)은 DDR-011 Phase 1(§10)에서 반영 |
 | DDR-012 | 폴트 계수 경로와 상세 경로 분리(D-10). DMISS 임계 규칙 유지. TT DMISS 경로는 변경 없음 |
 
 ---

@@ -566,7 +566,7 @@ void TimerMaster::run(const ScheduleTable& table) {
 |:--|:--|
 | 본 DDR §2.1, §4.3~4.4, §8~9 | 시간 경계 계약, 인접 TT/CBS 보호, 조건부 보장과 측정 가능한 허용 지연 |
 | [DDR-005](DDR-005-sched-ext-bpf-scheduler.md) Timer Master·BPF ops | 실제 종료 유발 수단, 실행 자격 검사, 초과 TT의 재삽입, 제어 지연 계측. 구체 API·타이머는 승인 전 |
-| [DDR-011 §1.2](DDR-011-runtime-table-update.md#12-2026-11-12-weekly-연계-검토--제안미구현) | 테이블 교체·삭제·STOP 뒤 오래된 슬롯 종료가 새 슬롯에 작용하지 않는 규칙, CBS-only 전환 |
+| [DDR-011 §5](DDR-011-runtime-table-update.md#5-d-p0-04--상주-타이머와-tt-free-인계) · [§10](DDR-011-runtime-table-update.md#10-이관과-검토-게이트) | Phase 0의 TT-free 인계(모든 격리 CPU의 구 TT 슬롯 완료 뒤 전환)를 기준으로, 종료 집행이 추가될 때 오래된 슬롯 종료가 새 슬롯에 작용하지 않는 규칙. CBS-only 전환은 DDR-011 Phase 1 범위 |
 | [DDR-012 §4.4](DDR-012-fault-management.md#44-2026-11-12-weekly-후속--피해-태스크와-원인-태스크-분리-검토용) | TT 초과·제어 지연·피해 태스크 실패의 구분과 복구 정책 |
 | [DDR-006 §4](DDR-006-communication-architecture.md#4-c-rework-아키텍처) | 제어 스레드 배치·스케줄링 계층·RT 경로의 통신 분리 |
 

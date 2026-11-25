@@ -446,7 +446,7 @@ sequenceDiagram
 
 ### 4.6 STOP(제거)
 
-DDR-011 §3.2/DDR-012 §5.1 경로를 유지한다. 추가되는 단계는 다음과 같다. 먼저 `sched_setattr(SCHED_OTHER)`로 되돌린다. 그다음 TimerMaster가 슬롯을 비활성화한다(§6.3 프로토콜 5): `kind = NONE`을 먼저 쓰고, 슬롯 전체에 닫기 쓸기를 수행해 QUEUED 기록을 CANCELLED로 바꾸고, RUNNING 기록은 워커가 끝난 것을 확인한 뒤 ABANDONED로 바꾼다. 마지막으로 `counter`를 올려 깨운다. 그 뒤 `TaskMeta`, `cbs_map`, Replenisher 힙 항목, 미해결 목록을 지운다. JobTraceCollector 통계는 누적 값으로 남긴다. SHM 슬롯은 지우지 않는다. 슬롯은 `task_id`에 고정 배정된 채 남고, 같은 `task_id`가 다시 등록되면 누적 카운터를 이어서 쓰되 새 `gen`을 받는다.
+기존 제거 경로와 DDR-012 §5.1의 복구 STOP 경로를 유지한다. DDR-011 Phase 0의 STOP·제거 결정([§3](DDR-011-runtime-table-update.md#3-d-p0-02--o-입력복구-stop과-한-건-확정), [§8](DDR-011-runtime-table-update.md#8-d-p0-07--적용-후-ack와-정상-제거))은 L1 TT 범위이며, L2 제거는 DDR-011 Phase 1에서 함께 정한다. 추가되는 단계는 다음과 같다. 먼저 `sched_setattr(SCHED_OTHER)`로 되돌린다. 그다음 TimerMaster가 슬롯을 비활성화한다(§6.3 프로토콜 5): `kind = NONE`을 먼저 쓰고, 슬롯 전체에 닫기 쓸기를 수행해 QUEUED 기록을 CANCELLED로 바꾸고, RUNNING 기록은 워커가 끝난 것을 확인한 뒤 ABANDONED로 바꾼다. 마지막으로 `counter`를 올려 깨운다. 그 뒤 `TaskMeta`, `cbs_map`, Replenisher 힙 항목, 미해결 목록을 지운다. JobTraceCollector 통계는 누적 값으로 남긴다. SHM 슬롯은 지우지 않는다. 슬롯은 `task_id`에 고정 배정된 채 남고, 같은 `task_id`가 다시 등록되면 누적 카운터를 이어서 쓰되 새 `gen`을 받는다.
 
 ### 4.7 마감 경과 감지: Event가 큐에서 대기하는 경우
 

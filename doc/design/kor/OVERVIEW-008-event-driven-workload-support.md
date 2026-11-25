@@ -268,7 +268,7 @@ CPU 이용률·최소 Gap·CPU별 태스크 수 제한도 함께 검사한다(D-
 - TT가 없는 CPU에서는 $B_{tt}=0$이고, CBS 실행·서버별 예산 보충·마감 감시가 **TT 슬롯 신호 없이** 동작해야 한다(CBS-007).
 - CBS 집행은 hyperperiod 값을 쓰지 않는다(P1 검증 대상). MIT의 최소공배수나 임의 기본값으로 TT hyperperiod를 만들지 않는다(D-22).
 - L2 전용 노드의 `hyperperiod_us`는 FR-O-015에 따라 0이 아닌 정의 값이며 CBS 실행 파라미터가 아니다. 현행 코드는 태스크가 있고 TT가 없는 노드에 0을 쓰는데, 이는 선행 버그다.
-- 표현·검증 방식(0 허용 여부 포함)과 갱신 시점은 구현 전에 확정한다(OI-25). 보존 계약은 [DDR-011 §1.2](DDR-011-runtime-table-update.md#12-2026-11-12-weekly-연계-검토--제안미구현)에서 다룬다.
+- 표현·검증 방식(0 허용 여부 포함)과 갱신 시점은 구현 전에 확정한다(OI-25). DDR-011 Phase 0은 고정 E/H에서 L1 TT 갱신만 다루므로, CBS 갱신과 TT 없는 테이블의 표현·전환은 [DDR-011 Phase 1](DDR-011-runtime-table-update.md#10-이관과-검토-게이트)에서 함께 정한다.
 
 ### 5.4 C와 MIT 정하기
 
@@ -380,4 +380,4 @@ CPU 이용률·최소 Gap·CPU별 태스크 수 제한도 함께 검사한다(D-
 | [HLD-008](HLD-008-event-driven-workload-support.md) | 구조, §8 앱 적용·예제 |
 | [앱 개발자 가이드](GUIDE-008-event-driven-app-developer-guide.md) | 어디서 무엇을 부르는지, 개발 절차, 반환 코드·폴트 해석, FCW 예제 *(Draft, 제안 API 기준)* |
 | [DDR-007 §4.3.1](DDR-007-tt-cbs-integrated-scheduling.md#431-tt-슬롯-종료-강제--2026-11-12-weekly-후속-설계) | P2 TT 시간 경계 설계 |
-| [DDR-005](DDR-005-sched-ext-bpf-scheduler.md) · [DDR-011 §1.2](DDR-011-runtime-table-update.md#12-2026-11-12-weekly-연계-검토--제안미구현) · [DDR-012 §4.4](DDR-012-fault-management.md#44-2026-11-12-weekly-후속--피해-태스크와-원인-태스크-분리-검토용) | BPF 집행, TT 없는 테이블 전환, 원인·피해 구분 |
+| [DDR-005](DDR-005-sched-ext-bpf-scheduler.md) · [DDR-011](DDR-011-runtime-table-update.md) · [DDR-012 §4.4](DDR-012-fault-management.md#44-2026-11-12-weekly-후속--피해-태스크와-원인-태스크-분리-검토용) | BPF 집행, 런타임 테이블 갱신(Phase 0은 L1 TT, CBS는 Phase 1), 원인·피해 구분 |
