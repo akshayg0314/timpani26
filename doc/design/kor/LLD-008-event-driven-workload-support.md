@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 # LLD-008: Event-Driven Workload Support — 상세 설계 (Low-Level Design)
 
 **날짜:** 2026-11-11
-**상태:** Draft (v5.2 — P1 Event–Job 계약 정합(Issue #53): 한 Event–한 Job, 명시적 Job 경계, 도달 기준 마감과 DeadlineMonitor, 실행 구간 관측. §1–§12 전체를 정합했다. v5.1에서 D-22~D-24와 리뷰 지적을 반영했다) — DDR-008(Proposal)의 D-01~D-24를 전제로 함
+**상태:** Draft (v5.3 — P1 Event–Job 계약 정합(Issue #53): 한 Event–한 Job, 명시적 Job 경계, 도달 기준 마감과 DeadlineMonitor, 실행 구간 관측. §1–§12 전체를 정합했다. v5.1에서 D-22~D-24와 리뷰 지적을 반영했다. v5.3에서 게시자·생산자 용어를 정리하고 최종 리뷰 지적을 정정했다) — DDR-008(Proposal)의 D-01~D-24를 전제로 함
 **작성:** Human + AI
 **상위 문서:** [REQ-008](REQ-008-event-driven-workload-support.md), [SRS-008](SRS-008-event-driven-workload-support.md), [DDR-008](DDR-008-event-driven-workload-support.md), [HLD-008](HLD-008-event-driven-workload-support.md), [P1 계약 보강 합의](P1-008-event-job-contract-amendment.md)
 **기준 코드:** `timpani26` HEAD `4201573` (`timpani-o/`, `timpani-n/`, `sample-apps/`, `examples/someip/`)
@@ -24,6 +24,7 @@ SPDX-License-Identifier: MIT
 | v5 | 2026-11-11 | P1 Event–Job 계약 보강 합의(Issue #53, `P1-008-event-job-contract-amendment.md`, P1 design brief v3)에 맞춰 §1–§12 개정. §6–§12에서 libttsched v2 계약과 구현 스케치, 인터리빙 논거와 P1 한계, 샘플(evttask, FCW), 타이밍 후보와 측정 방법, 실패 모드, AC-008-01~16 매핑, WBS, 열린 이슈(L-7 철회, L-9~L-23 추가)를 갱신했다. 한 Event–한 Job과 명시적 Job 경계, 도달 기준 마감(`t_arr + D`)과 DeadlineMonitor 신설, Event 레코드 링·Job 로그를 가진 SHM v2 슬롯, libttsched 게시·Event 대기·종료 계약, BPF의 실행 구간 관측으로 축소(MIT 검사·L2 DMISS 판정 제거), 단일 수용식(`L_del_max`, `δ_ovr`, `T_i ≤ MIT_i`, `D_i ≤ MIT_i`), FaultInfo 플래그 표 통일, proto 변경 승인 필요 표시. 어댑터 K/M 구분, batch count, 활성화 기준 DMISS는 폐지 |
 | v5.1 | 2026-11-16 | 설계 체인 리뷰 반영. DDR-008 D-22(TT 없는 CPU의 CBS 실행)와 D-24(허용 CPU 집합 확인)에 맞춰 §1 매핑에 FR-O-022, FR-B-025, FR-N-032~033을 추가했다. §3.1·§3.3의 `DEFAULT_HP_US`는 테이블 형식 값으로 정정했고(표현 변경은 OI-25), §3.3에 TT 없는 CPU의 배치를, §3.5에 `TtFreeCpuAdmitsL2WithZeroBtt`을 추가했다. §5.1 바인딩 스케치에 허용 CPU 검사(FR-N-033)를 넣고, §4·§5의 BPF dispatch와 보충·감시가 TT 이벤트에 의존하지 않음을 명시했다. §7 evttask의 C 측정 옵션, §10 AC-008-17~19, §11 WBS, §12 L-24~L-25를 추가했다. 설계 제안이며 API, protobuf, SHM 필드는 바꾸지 않았다 |
 | v5.2 | 2026-11-18 | 2026-11-17 변경: admission 용어를 수용 판정·수용식으로, 도착을 도달로 통일했다. budget-only L2 클래스 서술을 CBS 예산 관리와 Event/Job 관리의 책임 구분으로 바꿨다. 클래스나 구성 플래그는 두지 않는다(D-21, Project Leader(작성자)의 결정). wait 안에서 Job 시작을 확정하고 별도 공개 취득 API는 두지 않는다. 실행 문맥(D-24)과 타이머 대안 비교(F-10, OI-22)를 추가했다. 2026-11-18 리뷰 정정: `take()`의 복사 대상을 호출자 `ev` 버퍼로 고치고 앱 분류 비의존 문장을 복원했다. 정식 문서는 REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, HLD-008 v5.3, LLD-008 v5.2다. 이전 이력 행의 용어도 새 용어로 바꿨다. $L_{post}$ 상한(TIM-011)은 기준 게시자 구성에서 TIMPANI가 지키는 요구사항으로 두고, 배포가 그 구성을 만족하는 것을 가정 A-10으로 추가했다 (Project Leader(작성자) 결정). $L_{post}$의 시작점은 $t_{arr}$로 통일했다. |
+| v5.3 | 2026-11-26 | 용어 정리(Project Leader(작성자) 결정): post를 호출하는 쪽은 게시자, Event source에 게시될 입력을 만드는 쪽은 생산자로 구분했다. post 호출 스레드를 가리키던 생산자를 게시자로, 게시 스레드를 게시자 스레드로 바꿨다(기준 생산자 구성 → 기준 게시자 구성, 여러 생산자 게시 → 다중 게시자). 코드 주석의 reference producer configuration은 reference poster configuration으로 바꿨다. 감시 기록 큐를 쓰는 쪽과 FCW 생산자를 가리키는 생산자, 그리고 코드 주석에서 Job 로그를 쓰는 워커를 가리키는 producer는 그대로다. 최종 리뷰 정정: §3.3에서 MIT를 선언하지 않은 task에 자동으로 성립하는 조건을 $T_i \le MIT_i$로 한정했다. §5.6과 슬롯 구조체 주석에서 EVT 슬롯의 `counter`를 수락된 게시도 올린다고 고쳤다. 그 밖의 설계 내용과 수치는 바뀌지 않았다. 이전 이력 행의 용어도 새 용어로 바꿨다. 정식 문서는 REQ-008 v5.3, SRS-008 v4.3, DDR-008 v3.4, HLD-008 v5.4, LLD-008 v5.3다 |
 
 ---
 
@@ -401,7 +402,7 @@ bool GlobalScheduler::admit_l2_fifo(int cpu, const std::vector<ClassifiedTask>& 
 
 $C_i + B_{tt}(k, D_i) + L_{del,max} + \sum_{j \ne i} (C_j + \delta_{ovr}) \le D_i$ 이고 $D_i \le MIT_i$ 이고 $T_i \le MIT_i$
 
-- $MIT_i$는 `min_inter_arrival_us`이며, 없으면 주기를 쓴다(D-11 규칙). 그러므로 MIT를 선언하지 않은 task에서는 두 부가 조건이 자동으로 참이다.
+- $MIT_i$는 `min_inter_arrival_us`이며, 없으면 주기를 쓴다(D-11 규칙). 그러므로 MIT를 선언하지 않은 task에서는 $T_i \le MIT_i$가 자동으로 참이다. 이 경우 $MIT_i$가 주기이므로 $D_i \le MIT_i$는 $D_i$가 주기 이하일 때만 참이며, 주기보다 큰 $D_i$는 ParamInvalid로 거부된다(§3.2).
 - $L_{del,max}$ = 도달 시각 → 워커가 유휴 TT 없는 CPU에서 처음 디스패치될 때까지 = $L_{post}$(t_arr → runnable, 새 타이밍 항목, 후보 50 µs) + $L_{wake}$(runnable → 첫 실행, 유휴이고 TT 없는 CPU의 TIM-001, 50 µs). TT 점유 중 깨움(TIM-002)은 이 합에 넣지 않는다. TT 점유는 $B_{tt}$ 항이 덮는다(A24). 후보 $L_{del,max}$ = 100 µs. 측정할 목표이며 증명된 최악값이 아니다. TIM-001, TIM-002, TIM-011은 커널 쪽 정의를 그대로 둔다. $L_{post}$ 상한은 기준 게시자 구성(도달 시각 기록부터 게시 호출 반환까지 게시자 스레드가 다른 스레드에 선점되지 않는 구성, REQ-008 A-10)에서 성립한다.
 - $\delta_{ovr}$ = 한 서버가 스로틀되기 전에 예산을 넘겨 실행할 수 있는 상한(TIM-004 / TMG-004). P1에서는 HZ=1000의 틱 하나인 1 ms를 후보로 쓴다. nohz_full CPU와 틱 재시작 지연은 측정 대상이다. 이 항은 이전 식이 틱 초과를 무시했다는 개요 검토 의견에 답한다.
 - **결과**: 같은 CPU에 L2 task가 여러 개 있으면 수용 가능한 파라미터가 줄어든다. 위험이며 P2(HRTICK)로 완화한다.
@@ -1371,7 +1372,7 @@ struct ttsched_cnt {                   /* cumulative counters over the life of t
 
 struct timpani_task_slot {             /* 2752 bytes */
     char     name[16];                 /*   0  task_id (comm, ≤ 15 bytes + NUL). Pinned for the object's lifetime (L2) */
-    _Atomic uint32_t counter;          /*  16  futex word. TT: tick count. EVT: wake sequence (activation, deactivation and closing bump it) */
+    _Atomic uint32_t counter;          /*  16  futex word. TT: tick count. EVT: wake sequence (an accepted post, activation, deactivation and closing bump it) */
     _Atomic uint32_t kind;             /*  20  TTSCHED_KIND_NONE / TT / EVT */
     _Atomic uint64_t gen;              /*  24  upper 32 bits: low 32 bits of instance_id; lower 32 bits: bind count (bind_gen) */
     _Atomic uint32_t mit_us;           /*  32  configuration published at activation */
@@ -1525,7 +1526,7 @@ MISSED는 정확히 한 번 성공한 CAS로 설정된다. 설정 주체는 다�
 **TT 슬롯**
 
 - TT 슬롯은 같은 객체의 같은 크기 슬롯을 쓴다. 기존 핸드셰이크는 그대로다. `magic = 0` → TT 슬롯 `counter++` + 깨움 → 이름 기록 → `n_tasks`(release) → `generation++`(release) → `magic = TIMPANI_TTSCHED_MAGIC`(release). 유지되는 TT 태스크는 이전 인덱스를 쓰고, 새 TT 태스크는 EVT에 배정된 적이 없는 가장 낮은 빈 인덱스를 쓴다.
-- "전 슬롯 `counter` 증가"는 **TT 슬롯에만** 적용한다. EVT 슬롯의 `counter`는 활성화·비활성화·닫기에서만 올린다.
+- "전 슬롯 `counter` 증가"는 **TT 슬롯에만** 적용한다. EVT 슬롯의 `counter`는 TIMPANI-N이 활성화·비활성화·닫기에서, 게시자가 수락된 게시의 (f) 단계에서 올린다.
 
 **EVT 슬롯의 배정과 유지 (`update_evt_slots`)**
 

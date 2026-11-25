@@ -110,6 +110,8 @@ SPDX-License-Identifier: MIT
 
 > **2026-11-18 참고:** 2026-11-17에 공개 호출 이름, wait 안에서의 Job 시작 확정, CBS 예산 관리와 Event/Job 관리의 책임 구분을 본문에 반영했다. 이는 Project Leader(작성자)의 결정이다. 정식 문서는 REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, HLD-008 v5.3, LLD-008 v5.2다. 같은 날 $L_{post}$ 상한(TIM-011)은 기준 게시자 구성에서 TIMPANI가 지키는 요구사항으로 두고, 배포가 그 구성을 만족하는 것을 가정(REQ-008 A-10)으로 정했다.
 
+> **2026-11-26 참고:** 게시자·생산자 용어를 정리했다(post를 호출하는 쪽은 게시자, Event source에 게시될 입력을 만드는 쪽은 생산자). 이는 Project Leader(작성자)의 결정이며 이 문서의 계약을 바꾸지 않는다. 정식 문서는 REQ-008 v5.3, SRS-008 v4.3, DDR-008 v3.4, HLD-008 v5.4, LLD-008 v5.3다.
+
 ### 남은 열린 항목
 
 - **수치 바운드(후보, 미합의):** 감지 지연 2 ms 이하, 보고 지연 200 ms 이하, $L_{post}$ 50 µs, $L_{del}^{max}$ 100 µs, `tol` 50 µs, `tol_mit` 0, $\delta_{ovr}$ 1 틱, QDEPTH 8, payload 64 B, DeadlineMonitor 우선순위 97(Replenisher 98), 주기 1 ms, 대기 back-off 10 ms, SHM 후보 64 슬롯 이하 256 KiB(REQ §11 OI-18~OI-19).
