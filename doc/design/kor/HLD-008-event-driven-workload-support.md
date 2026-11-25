@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 # HLD-008: Event-Driven Workload Support — 상위 설계 (High-Level Design)
 
 **날짜:** 2026-11-11
-**상태:** Draft (v5.3, 2026-11-18 용어를 정식 문서와 맞추고 Project Leader(작성자)의 결정을 반영했다. 리뷰 정정: 예산 보충 실행 주체, D-22 행, 수용 판정 Mermaid 라벨, 게시 표현, $L_{post}$ 기준 생산자 구성. v5.2, 2026-11-16 리뷰 반영: §8.2 C·MIT 측정 절차 정정(C 등록 범위, 입력 제어 한계, MIT 관측 방법, C 대조 구간, `budget_used_us` 표시), §8.1 목록 들여쓰기, D-22~D-24 반영(§3, §7, §8.4, §8.5, §10). v5.1 — 2026-11-16 §8 적용 절차 보강: C·MIT 측정 절차, 재게시 의미. v5 — P1 Event–Job 계약 정렬(Issue #53): 한 Event 한 Job, 도달 기준 마감, 공통 Event 큐, DeadlineMonitor, 적용 방법론 재작성) — DDR-008(Proposal)의 D-01~D-24 확정을 전제로 함. D-22와 D-24는 v5.2에서 §3 컴포넌트 표, §7 결정 표, §8.4 배치 전제에 반영했다. D-23은 P2이며 P1 메커니즘을 바꾸지 않는다
+**상태:** Draft (v5.3, 2026-11-18 용어를 정식 문서와 맞추고 Project Leader(작성자)의 결정을 반영했다. 리뷰 정정: 예산 보충 실행 주체, D-22 행, 수용 판정 Mermaid 라벨, 게시 표현, $L_{post}$ 기준 게시자 구성. v5.2, 2026-11-16 리뷰 반영: §8.2 C·MIT 측정 절차 정정(C 등록 범위, 입력 제어 한계, MIT 관측 방법, C 대조 구간, `budget_used_us` 표시), §8.1 목록 들여쓰기, D-22~D-24 반영(§3, §7, §8.4, §8.5, §10). v5.1 — 2026-11-16 §8 적용 절차 보강: C·MIT 측정 절차, 재게시 의미. v5 — P1 Event–Job 계약 정렬(Issue #53): 한 Event 한 Job, 도달 기준 마감, 공통 Event 큐, DeadlineMonitor, 적용 방법론 재작성) — DDR-008(Proposal)의 D-01~D-24 확정을 전제로 함. D-22와 D-24는 v5.2에서 §3 컴포넌트 표, §7 결정 표, §8.4 배치 전제에 반영했다. D-23은 P2이며 P1 메커니즘을 바꾸지 않는다
 **작성:** Human + AI
 **상위 문서:** [REQ-008](REQ-008-event-driven-workload-support.md), [SRS-008](SRS-008-event-driven-workload-support.md), [DDR-008](DDR-008-event-driven-workload-support.md)
 **관련 문서:** [P1 계약 보강 합의](P1-008-event-job-contract-amendment.md), [DDR-002](DDR-002-scheduling-architecture.md), [DDR-003](DDR-003-interface-protocol.md), [DDR-005](DDR-005-sched-ext-bpf-scheduler.md), [DDR-006](DDR-006-communication-architecture.md), [DDR-007](DDR-007-tt-cbs-integrated-scheduling.md), [DDR-011](DDR-011-runtime-table-update.md), [DDR-012](DDR-012-fault-management.md)
@@ -234,7 +234,7 @@ int ttsched_evt_done(int outcome);                     /* worker: end the open J
 | `ttsched_evt_done(outcome)` | 워커 | 열린 Job을 끝낸다(프로토콜 4). `COMPLETED` 또는 `DISCARDED`. `W0`의 seq가 열린 Job의 seq와 다르거나 `W0`가 ABANDONED이면 E_INACTIVE(TIMPANI가 닫았거나 칸이 재사용되었다). 열린 Job 플래그는 E_INACTIVE여도 지운다 |
 
 - **Inline payload만 P1에서 지원한다.** `len > TTSCHED_EVT_PAYLOAD_MAX`이면 E_INVAL. TIMPANI는 payload 바이트가 Event 식별자·시각과 일치함을 보장한다. 앱이 payload에 자기 저장소의 참조를 넣으면 그 저장소의 수명은 계약 밖이다(P1에는 해제 통지가 없다). 큰 payload와 명시적 해제는 P2(F-13). FCW의 `RadarTarget`(16바이트)은 인라인에 들어간다.
-- **Posting context는 source당 하나.** 같은 source에 대한 `ttsched_evt_post`는 동시에 호출되지 않아야 한다(어댑터 스레드 하나, 또는 어댑터가 호출을 직렬화). libttsched는 잠금을 쓰지 않으며 위반을 감지하지 않는다. 위반 시 그 source의 큐만 깨질 수 있다. 다중 생산자는 P2(F-13). 포스터는 워커와 같은 프로세스의 스레드이거나, SHM 쓰기 권한이 있는 같은 호스트의 다른 프로세스일 수 있다.
+- **Posting context는 source당 하나.** 같은 source에 대한 `ttsched_evt_post`는 동시에 호출되지 않아야 한다(어댑터 스레드 하나, 또는 어댑터가 호출을 직렬화). libttsched는 잠금을 쓰지 않으며 위반을 감지하지 않는다. 위반 시 그 source의 큐만 깨질 수 있다. 다중 게시자는 P2(F-13). 게시자는 워커와 같은 프로세스의 스레드이거나, SHM 쓰기 권한이 있는 같은 호스트의 다른 프로세스일 수 있다.
 - **워커는 source당 스레드 하나**다. 스레드 이름은 `task_id`(1~15바이트, 테이블 적용 때 검증). 같은 source에 대해 두 번째 스레드가 wait/done을 부르면 계약 위반이다.
 - **도달 시각 `t_arr`.** `t_arr_ns == 0`이면 게시 호출이 CLOCK_MONOTONIC을 읽는다. 값을 주면 CLOCK_MONOTONIC이어야 하고, 미래이면 안 되며, 같은 source의 직전 도달보다 빠르면 안 된다(E_INVAL). 현재 시각보다 이른 값은 준 그대로 수락한다. 어댑터가 이미 쓴 시간은 응답 시간의 일부이며 수용식이 덮지 않는다(§3.6 가정 5).
 - **비용 한계.** post, wait(블로킹 없는 경우), done은 바운드된 원자 연산 수(호출별 개수는 LLD-008 §6이 준다, 후보), payload 복사 1회(64바이트 이하), 최대 futex 시스템 호출 1회다. 힙, 잠금, 블로킹은 없다. 매핑과 재매핑은 이 한계 밖이며 `ttsched_evt_open()`과 `ttsched_init()`이 비-RT 경로에서 수행한다. 매핑이 쓸 수 없으면 post와 wait는 재매핑하지 않고 E_INACTIVE를 반환한다.
@@ -257,7 +257,7 @@ $$C_i + B_{tt}(k, D_i) + L_{del}^{max} + \sum_{j \ne i}(C_j + \delta_{ovr}) \le 
 |:--|:--|:--|
 | $C_i$ | 태스크 $i$의 예산 `runtime`. 측정한 Job당 최대 CPU 시간보다 크게 선언한다(§8.1 9항) | 선언값 |
 | $B_{tt}(k, D_i)$ | 길이 $D_i$인 임의 윈도우 안에서 CPU $k$의 TT 점유 최댓값 | 계산값(TT 테이블에서) |
-| $L_{del}^{max}$ | 도달부터 워커의 최초 디스패치까지 상한 = $L_{post}$(TIM-011, $t_{arr}$에서 실행 가능까지, 후보 50 µs) + $L_{wake}$(TIM-001, 실행 가능에서 최초 실행까지, 유휴이고 TT가 없는 CPU, 50 µs). TIM-002(TT 점유 중 깨움)는 넣지 않으며 그 대기는 $B_{tt}$ 항이 덮는다. $L_{post}$ 상한은 **기준 생산자 구성**(도달 시각 기록부터 게시 호출 반환까지 생산자 스레드가 다른 스레드에 선점되지 않는 구성, REQ-008 A-10)에서 성립한다. | 후보 100 µs |
+| $L_{del}^{max}$ | 도달부터 워커의 최초 디스패치까지 상한 = $L_{post}$(TIM-011, $t_{arr}$에서 실행 가능까지, 후보 50 µs) + $L_{wake}$(TIM-001, 실행 가능에서 최초 실행까지, 유휴이고 TT가 없는 CPU, 50 µs). TIM-002(TT 점유 중 깨움)는 넣지 않으며 그 대기는 $B_{tt}$ 항이 덮는다. $L_{post}$ 상한은 **기준 게시자 구성**(도달 시각 기록부터 게시 호출 반환까지 게시자 스레드가 다른 스레드에 선점되지 않는 구성, REQ-008 A-10)에서 성립한다. | 후보 100 µs |
 | $\delta_{ovr}$ | 다른 서버가 예산을 넘긴 뒤 스로틀될 때까지의 최대 초과. 스케줄러 틱 한 번 (TIM-004/TMG-004) | 후보 1 ms(HZ=1000) |
 | $MIT_i$ | `min_inter_arrival_us`, 없으면 주기(D-11 규칙) | 선언값 |
 | $T_i$ | CBS 서버 주기(`period`) | 선언값 |
@@ -267,7 +267,7 @@ $L_{del}^{max}$의 두 부분은 모두 **측정 목표**이며 증명된 최악
 **가정(이 식이 충분조건이 되는 조건, 문서가 목록으로 가진다)**
 
 1. TT 태스크는 선언한 런타임 안에서 실행된다. TT 초과는 TT DMISS이며 L2 보장 밖이다.
-2. $\delta_{ovr}$과 $L_{del}^{max}$은 측정값으로 성립한다. $L_{post}$ 상한은 기준 생산자 구성에서 성립한다(A-10).
+2. $\delta_{ovr}$과 $L_{del}^{max}$은 측정값으로 성립한다. $L_{post}$ 상한은 기준 게시자 구성에서 성립한다(A-10).
 3. source의 도달은 MIT를 지킨다.
 4. Job은 블로킹하지 않는다(§8.1 6항). A-06은 이 식의 적용 조건이며 정확성 전제는 아니다. 블로킹하는 source는 마감을 감시하지만 수용식이 보장하지 않는다.
 5. 어댑터는 도달 시점에 게시한다. 준 $t_{arr}$이 현재보다 이르면 그만큼 $D$가 소비된다.
@@ -609,9 +609,9 @@ RT 경로 스레드(TimerMaster, DeadlineMonitor, Replenisher)는 gRPC, 힙 할�
 
 - **워커 TID 불변조건:** 등록 L2 워커는 배정된 Isolated CPU에서 `SCHED_EXT`/timpani-n 커널 BPF CBS로 실행되며, 배정 CPU가 워커의 허용 집합에 있어야 한다(CBS-008). 컨테이너 전체의 격리 배치를 요구하는 것이 아니다. 앱은 `/dev/shm/timpani_ttsched`에 **쓰기 가능으로** 접근한다. 워커의 wait·done이 기록 상태와 카운터를 바꾸기 때문이다(현행 TT 앱의 읽기 전용 접근과 다르다).
 - L2 source마다 워커 스레드가 하나 있다. 스레드의 comm은 `task_id`다. 워커가 아닌 스레드가 wait 또는 done을 부르지 않는다.
-- post 컨텍스트는 source당 하나다(§3.4). 같은 프로세스의 스레드이거나, SHM 쓰기 권한이 있는 같은 호스트의 다른 프로세스일 수 있다(OI-15 종결, DDR-008 D-03). 포스터 측이 여러 개면 앱이 직렬화한다.
+- post 컨텍스트는 source당 하나다(§3.4). 같은 프로세스의 스레드이거나, SHM 쓰기 권한이 있는 같은 호스트의 다른 프로세스일 수 있다(OI-15 종결, DDR-008 D-03). 게시자 측이 여러 개면 앱이 직렬화한다.
 - **현행과 검토 목표의 구분:** 현행은 시스템·Pullpiri의 컨테이너 cpuset 구성에 따르며 N의 바인딩은 cgroup을 이동하지 않는다. 워커만 Isolated cpuset, 비워커는 Non-Isolated CPU에 두는 목표는 배포 검토 중이다. 공통 threaded domain/`cgroup.threads` 조건, partition 격리와의 차이, 런타임 위임·권한·상속·재시작 및 N의 이동/검증 책임 미결 사항은 [DDR-008 D-24](DDR-008-event-driven-workload-support.md#d-24-애플리케이션-추상화와-실행-환경-전제--p1)를 따른다. 구현·검증 완료로 취급하지 않는다.
-- API는 호출 스레드에서 실행되고 SHM 자체는 실행하지 않는다. wait·done의 CPU 실행 비용은 워커 CBS, post 비용은 생산자 문맥에 속한다. 비워커 fair/FIFO/RR 중 선택·관리는 P1 범위 밖이며, 배치·정책·간섭의 환경 검증은 유지한다(D-24).
+- API는 호출 스레드에서 실행되고 SHM 자체는 실행하지 않는다. wait·done의 CPU 실행 비용은 워커 CBS, post 비용은 게시자 문맥에 속한다. 비워커 fair/FIFO/RR 중 선택·관리는 P1 범위 밖이며, 배치·정책·간섭의 환경 검증은 유지한다(D-24).
 
 ---
 
@@ -676,17 +676,17 @@ RT 경로 스레드(TimerMaster, DeadlineMonitor, Replenisher)는 gRPC, 힙 할�
 **쓰기 규칙.**
 
 - **R-a.** `head`는 칸 `s`가 `(s, 터미널 상태)`일 때만 CAS로 `s+1`로 간다. 칸은 `head`가 지나간 뒤에만 재사용된다. 그래서 QUEUED나 RUNNING 기록은 덮어쓰이지 않는다. 워커는 RUNNING인 동안 payload를 복사한다.
-- **R-b.** 포스터만 `tail`과 `tail` 칸의 필드를 쓴다. 순서는 필드 채우기 → `word = (seq = tail, QUEUED)` 게시 → `tail + 1`이다. 칸은 `word.seq`가 기대 `seq`와 같고 상태가 FREE가 아닐 때만 게시된 것이다. 두 마지막 단계 사이에서 죽은 포스터가 남긴 게시 기록은, 다음 post가 `tail`이 그 칸을 가리키는 것을 보고 `tail`을 먼저 전진시켜 복구한다. `tail`은 포스터의 가득 참 검사에만 쓰인다.
+- **R-b.** 게시자만 `tail`과 `tail` 칸의 필드를 쓴다. 순서는 필드 채우기 → `word = (seq = tail, QUEUED)` 게시 → `tail + 1`이다. 칸은 `word.seq`가 기대 `seq`와 같고 상태가 FREE가 아닐 때만 게시된 것이다. 두 마지막 단계 사이에서 죽은 게시자가 남긴 게시 기록은, 다음 post가 `tail`이 그 칸을 가리키는 것을 보고 `tail`을 먼저 전진시켜 복구한다. `tail`은 게시자의 가득 참 검사에만 쓰인다.
 - **R-c.** 소유자가 아닌 주체(DeadlineMonitor, TimerMaster, 도우미)는 `word`를 읽고, 필드를 읽고, `word`를 다시 읽는다. 두 값이 다르면 재시도하거나 건너뛴다. 상태는 읽은 값에 대한 CAS로만 바꾼다. 모니터와 닫기 쓸기는 슬롯의 칸 전체(QDEPTH)를 훑고 상태로 고른다. `head`와 `tail`로 범위를 정하지 않는다. QUEUED나 RUNNING인 `word`는 R-a에 따라 항상 살아 있는 기록이다.
 
 **쓰는 주체 요약.**
 
-- 포스터: 기록 필드, `word` 게시, `tail`, 도달 기록, `arrivals`, `accepted`, `overflow`, `revoked`, `mit_viol`, `counter` 증가와 깨움. 롤백 때의 CANCELLED(`cancelled`)와 REVOKED 전이.
+- 게시자: 기록 필드, `word` 게시, `tail`, 도달 기록, `arrivals`, `accepted`, `overflow`, `revoked`, `mit_viol`, `counter` 증가와 깨움. 롤백 때의 CANCELLED(`cancelled`)와 REVOKED 전이.
 - 워커: QUEUED→RUNNING, `t_begin`, 끝 전이와 `t_end`, `started`, `completed`, `discarded`, `resp_max_ns`, Job 로그. 대기 중 stale 세대 기록의 CANCELLED 전이(마감이 지났으면 MISSED 포함).
 - DeadlineMonitor: MISSED 플래그(CAS)와 `missed` 증가만.
 - TimerMaster: `kind`, `name`, 설정, `gen`, `last_arr_ns = 0`(활성화), 닫기 전이(CANCELLED, ABANDONED, MISSED가 있으면 함께)와 그 카운터, `counter` 증가와 깨움.
 
-**메모리 순서.** `kind`, `gen`, `word`, `head`, `tail`, `counter`는 순차 일관(sequentially consistent) 원자 연산으로 읽고 쓴다. 프로토콜은 저장 뒤 적재(store-then-load) 쌍에 기댄다(포스터: 게시 후 `kind`와 `gen` 읽기; TimerMaster: `kind` 쓰기 후 `word` 읽기). 약한 순서로는 안전하지 않다. LLD-008의 테스트 목록에 각 쌍의 두 스레드 테스트를 둔다.
+**메모리 순서.** `kind`, `gen`, `word`, `head`, `tail`, `counter`는 순차 일관(sequentially consistent) 원자 연산으로 읽고 쓴다. 프로토콜은 저장 뒤 적재(store-then-load) 쌍에 기댄다(게시자: 게시 후 `kind`와 `gen` 읽기; TimerMaster: `kind` 쓰기 후 `word` 읽기). 약한 순서로는 안전하지 않다. LLD-008의 테스트 목록에 각 쌍의 두 스레드 테스트를 둔다.
 
 ### 6.3 SHM 프로토콜 (요약; 번호는 여기서 정한다)
 
@@ -697,13 +697,13 @@ RT 경로 스레드(TimerMaster, DeadlineMonitor, Replenisher)는 gRPC, 힙 할�
 1. **활성화**(TimerMaster, 바인딩 때): `kind = NONE`을 먼저 쓴다 → 남은 비종료 기록을 닫는다(RUNNING은 ABANDONED) → 설정을 쓴다 → `last_arr_ns = 0` → 새 `gen` → `kind = EVT`. 카운터 기준선을 잡는다. 인덱스는 리셋하지 않는다.
 2. **수락**(post): (a) `kind != EVT`이면 E_INACTIVE, 아무것도 바꾸지 않는다. (b) `gen`을 읽는다. (c) 도달 기록: 값을 검증하고, `arrivals++`, 직전 도달과의 간격이 MIT보다 짧으면 `mit_viol++`와 `last_viol_ns`, `last_arr_ns` 갱신. (d) R-b 복구, `tail - head == QDEPTH`이면 `head`를 돕는다. 그래도 가득 차면 `overflow++`, E_FULL. (e) 칸을 채우고 `word = (tail, QUEUED)`를 게시하고 `tail++`. (f) `kind == EVT`와 `gen`을 다시 확인한다. 맞으면 `accepted++`, `counter++`, FUTEX_WAKE(1), 0을 반환한다. 아니면 현재 `word`로 롤백 루프를 돈다. QUEUED가 아니면(워커나 TIMPANI가 처리함) 수락으로 처리한다. QUEUED이고 MISSED가 있으면 MISSED를 유지하며 CANCELLED로 바꾸고 `accepted++`, `cancelled++`. QUEUED이고 MISSED가 없으면 REVOKED로 바꾸고 `revoked++`, E_INACTIVE. CAS가 실패하면 되풀이한다.
    - P1 한계: 재등록 사이를 걸친 post 한 건은 새 등록의 도달 기록에 셈이 들어갈 수 있다. 재등록마다 많아야 한 건이다.
-   - P1 한계(포스터 사망): 게시 뒤 `tail` 전진 전에 포스터가 죽으면 다음 post가 그 기록을 복구해 `accepted`에 셈하고 워커를 깨운다. `tail` 전진 뒤 (f) 이전에 죽으면 `accepted` 한 건이 빠지며 복구되지 않는다. 두 경우 모두 워커는 다음 post나 TimerMaster 깨움 전까지 그 Event 때문에 깨지 않으며, 마감 감시는 받는다. 따라서 '수락 수 + 거절 수 = 게시 시도 수'와 '계수가 Job 기록과 일치한다'는 포스터가 죽지 않은 구간에서만 성립한다.
+   - P1 한계(게시자 사망): 게시 뒤 `tail` 전진 전에 게시자가 죽으면 다음 post가 그 기록을 복구해 `accepted`에 셈하고 워커를 깨운다. `tail` 전진 뒤 (f) 이전에 죽으면 `accepted` 한 건이 빠지며 복구되지 않는다. 두 경우 모두 워커는 다음 post나 TimerMaster 깨움 전까지 그 Event 때문에 깨지 않으며, 마감 감시는 받는다. 따라서 '수락 수 + 거절 수 = 게시 시도 수'와 '계수가 Job 기록과 일치한다'는 게시자가 죽지 않은 구간에서만 성립한다.
 3. **대기**(wait): 열린 Job이 있으면 E_STATE. 반복한다. `counter`를 먼저 읽고 `kind`를 확인한다. `kind != EVT`이면 back-off 후 E_INACTIVE. `head` 칸의 `word`를 읽는다. 게시되지 않았거나 FREE이면 `FUTEX_WAIT(counter, c)`(EINTR, EAGAIN이면 되풀이, 게시되지 않은 칸을 건너뛰지 않는다). 터미널이면 `head`를 `s+1`로 CAS하고 되풀이. QUEUED이고 기록의 `gen`이 현재 `gen`과 다르면 CANCELLED로 바꾸고(마감이 지났으면 MISSED를 함께 세우고 `missed++`를 한다. 이 미스는 DETECTED_LATE로 표시한다), `cancelled++`, 되풀이. QUEUED이면 RUNNING으로 CAS(MISSED 유지, 실패하면 재시도), 로컬 `t_begin` 기록, `started++`, 기록을 복사하고 0을 반환. RUNNING이면 살아 있지 않은 워커의 기록이므로 `FUTEX_WAIT`(TimerMaster가 닫고 깨운다).
 4. **완료**(done, 순서가 중요하다): (i) `word`를 `W0`로 읽는다. `W0`의 `seq`가 열린 Job의 `seq`와 다르거나 `W0`가 ABANDONED이면 열린 플래그를 지우고 E_INACTIVE. ABANDONED는 터미널이므로 `head`가 넘긴 뒤 칸이 다른 Event에 재사용되었을 수 있다. 이 검사가 없으면 done이 그 Event를 덮어쓸 수 있다. (ii) `t_end = now`(`W0`를 읽은 뒤). (iii) 새 `word = (seq, COMPLETED 또는 DISCARDED)`. `W0`에 MISSED가 있으면 유지하고, $t_{end} > t_{dl}$이면 MISSED를 추가한다. (iv) `W0`에서 CAS한다. 실패하면 (i)로 간다. 이때 `W0` 뒤에 들어온 MISSED 표시는 CAS를 실패시키고, 새 시계값은 $t_{dl}$ 이후가 된다. 성공 뒤 MISSED를 이 CAS가 추가했다면 `missed++`, `completed++` 또는 `discarded++`, `resp_max_ns`, Job 로그 항목을 사적 복사본으로 쓰고, `head`를 CAS로 전진시키고, 열린 플래그를 지운다.
    - P1 한계: 이전 바인딩의 마지막 Job의 `missed++`는 다음 등록의 기준선 뒤에 들어올 수 있다. 바인딩마다 많아야 한 건이다. DeadlineMonitor의 `missed++`도 CAS 뒤에 실행되므로 같은 한계를 가진다.
 5. **비활성화**(workload 제거, STOP, 워커 종료 감지, 데몬 종료): `kind = NONE`을 먼저 쓴다 → 슬롯 전체 칸에 닫기 쓸기: QUEUED → CANCELLED. RUNNING → ABANDONED는 워커가 끝난 경우에만. 아니면 RUNNING으로 남고 워커가 끝낼 수 있으며 터미널이 될 때까지 마감 감시를 받는다. 같은 CAS에서 `now > t_dl`이고 MISSED가 아직 없으면 MISSED를 붙이고 `missed++`. 카운터를 올리고, `head`를 돕고, `counter++`, 깨움. 기다리던 워커는 E_INACTIVE를 받는다.
    - 닫기 규칙(활성화와 데몬 시작 정리가 쓴다): 위와 같되 RUNNING → ABANDONED를 무조건 적용한다.
-6. **마감 결과**(결정): MISSED는 성공한 CAS 한 번으로만 설정된다. 설정 주체는 (a) DeadlineMonitor(QUEUED 또는 RUNNING이고 $now > t_{dl}$), (b) 워커의 끝 전이($t_{end} > t_{dl}$), (c) 닫기 쓸기($now > t_{dl}$), (d) 워커가 대기 중 stale 세대 기록을 CANCELLED로 바꾸는 취소(프로토콜 3, $now > t_{dl}$)다. 포스터의 롤백은 이미 설정된 MISSED를 유지할 뿐 새로 세우지 않는다. 설정한 주체가 `missed++`를 한다. 그래서 미스는 감지 주체와 관계없이 Job당 한 번 세며, $t_{dl}$ 이하에 게시된 완료는 늦게 수집되어도 미스가 아니고, 뒤의 전이가 MISSED를 지우지 않는다.
+6. **마감 결과**(결정): MISSED는 성공한 CAS 한 번으로만 설정된다. 설정 주체는 (a) DeadlineMonitor(QUEUED 또는 RUNNING이고 $now > t_{dl}$), (b) 워커의 끝 전이($t_{end} > t_{dl}$), (c) 닫기 쓸기($now > t_{dl}$), (d) 워커가 대기 중 stale 세대 기록을 CANCELLED로 바꾸는 취소(프로토콜 3, $now > t_{dl}$)다. 게시자의 롤백은 이미 설정된 MISSED를 유지할 뿐 새로 세우지 않는다. 설정한 주체가 `missed++`를 한다. 그래서 미스는 감지 주체와 관계없이 Job당 한 번 세며, $t_{dl}$ 이하에 게시된 완료는 늦게 수집되어도 미스가 아니고, 뒤의 전이가 MISSED를 지우지 않는다.
 7. **데몬 재시작**(9209bc5의 객체 수명 유지, LLD-008 시작 절): 객체가 있으면 새 데몬이 열어 `magic = 0`과 모든 슬롯의 `kind = NONE`을 쓰고, 모든 슬롯에 닫기 규칙을 수행한다(연체 기록에 MISSED와 DETECTED_LATE), 대기자를 깨우고, 최종 카운터를 로그에 남긴 뒤 객체를 unlink하고 새 `instance_id`로 새 객체를 만든다. 이전 객체에 붙은 프로세스는 E_INACTIVE를 받고 `ttsched_init()`으로 새 객체에 붙는다. `seq`는 새 객체에서 다시 시작하고, `gen`이 달라서 `(gen, seq)`는 실질적으로 유일하다. 보장은 아니며 트레이스는 `instance_id`를 함께 기록한다. 데몬이 죽어 있는 동안의 P1 한계는 §4.11에 있다.
 
 ### 6.4 프로토콜 변경 (protobuf, 승인 필요)
@@ -779,7 +779,7 @@ Job 기록은 같은 비트를 같은 뜻으로 쓰고, 자체 `outcome` 필드�
 | D-23 | 마감 실패 사실과 원인·복구의 분리(P2. P1 메커니즘 변경 없음) | P1은 감지·계수·보고만. 원인 분류는 P2 |
 | D-24 | 앱 추상화와 cpuset 배치 전제 | 어댑터·libttsched, TIMPANI-N 바인딩(허용 CPU 확인) |
 
-폐기된 대안(배치 개수 $n$, 활성화 기준 DMISS, 앱 소유 큐와 invalidate·RESET, 다중 생산자 링, payload 핸들, 묵시적 완료, 경합의 가드 밴드와 잠정 판정)은 DDR-008의 해당 결정 대안 표에 기록한다. 이 문서는 그 대안을 설계 근거로 쓰지 않는다.
+폐기된 대안(배치 개수 $n$, 활성화 기준 DMISS, 앱 소유 큐와 invalidate·RESET, 다중 게시자 링, payload 핸들, 묵시적 완료, 경합의 가드 밴드와 잠정 판정)은 DDR-008의 해당 결정 대안 표에 기록한다. 이 문서는 그 대안을 설계 근거로 쓰지 않는다.
 
 ---
 ## 8. 애플리케이션 적용 방법론과 샘플 앱 가이드 (Phase 1)
@@ -802,12 +802,12 @@ Job 기록은 같은 비트를 같은 뜻으로 쓰고, 자체 `outcome` 필드�
 앱이 지킬 규칙은 다음과 같다.
 
 1. **식별.** 워커 스레드의 comm을 `task_id`(1~15바이트, 노드 안에서 유일)로 설정한다(`pthread_setname_np`). `source`의 wait와 done을 부르는 스레드는 하나다. 같은 comm의 다른 스레드가 wait 또는 done을 부르면 계약 위반이다. 입력 어댑터가 쓸 source 핸들은 초기화 때 `ttsched_evt_open(task_id)`로 한 번 얻는다.
-2. **도달 지점에서 게시한다.** Event가 앱에 처음 보이는 지점(콜백 진입, datagram 읽기 완료 등)에서 바로 게시한다. 나중에 게시하면 도달부터 게시까지의 지연만큼 마감 $D$가 줄어든다. 이 지연은 응답 시간에 포함되고 수용식이 덮지 않는다(§3.6 가정 5). 생산자 스레드는 **기준 생산자 구성**(REQ-008 A-10)을 따른다. 도달 시각 기록부터 게시 호출 반환까지 다른 스레드에 선점되지 않아야 TIM-011의 $L_{post}$ 상한이 성립한다. 후보는 유휴이거나 전용인 CPU에 고정한 실시간 정책 스레드이며 측정으로 확정한다. TIMPANI는 이 스레드의 정책을 관리하지 않는다(DDR-008 D-24).
+2. **도달 지점에서 게시한다.** Event가 앱에 처음 보이는 지점(콜백 진입, datagram 읽기 완료 등)에서 바로 게시한다. 나중에 게시하면 도달부터 게시까지의 지연만큼 마감 $D$가 줄어든다. 이 지연은 응답 시간에 포함되고 수용식이 덮지 않는다(§3.6 가정 5). 게시자 스레드는 **기준 게시자 구성**(REQ-008 A-10)을 따른다. 도달 시각 기록부터 게시 호출 반환까지 다른 스레드에 선점되지 않아야 TIM-011의 $L_{post}$ 상한이 성립한다. 후보는 유휴이거나 전용인 CPU에 고정한 실시간 정책 스레드이며 측정으로 확정한다. TIMPANI는 이 스레드의 정책을 관리하지 않는다(DDR-008 D-24).
 3. **post 인자.** payload는 64바이트 이하(인라인)다. `t_arr_ns`가 0이면 호출 시각이다. 값을 주면 CLOCK_MONOTONIC이어야 하고, 미래이면 안 되며, 같은 source의 직전 도달보다 빠르면 안 된다(E_INVAL).
 4. **post 결과 처리.** 0이면 수락이다. E_FULL이면 넘침이며 TIMPANI가 `overflow`를 세고, 앱은 버린 수를 자기 통계에 넣는다. E_INACTIVE이면 Event는 만들어지지 않았다. 앱이 `ttsched_init()`을 부른 뒤 재시도할지, 버릴지를 정책으로 정한다. 같은 Event를 두 번 수락시키지 않도록 재시도 정책을 명시한다. E_INVAL은 앱 버그이므로 로그에 남긴다.
    - **재바인딩 경계의 재게시.** 재바인딩(워커 재시작, 파라미터가 바뀐 테이블 재적용, 제거 후 재추가, 데몬 재시작) 경계에서 앱이 같은 입력을 다시 post하면, 그 입력은 새 `gen`의 **별개 Event**가 된다. TIMPANI는 payload를 해석하지 않으므로 같은 입력인지 모른다. 이전 `gen`의 Event는 닫기 규칙으로 CANCELLED 또는 ABANDONED가 되고, 그 마감 실패는 기록·통계에만 남는다(D-17, D-19). 중복 처리 방지는 앱이 메시지 고유 ID 등으로 한다.
    - 재게시할 때 `t_arr`로 원래 도달 시각을 쓰면, 새 등록의 D가 같을 때 마감 $t_{arr} + D$가 유지되고 재연결 지연이 응답 시간에 들어간다. D가 바뀌면 새 설정으로 마감을 계산하므로 이전 Event와 같은 마감은 아니다. 재게시 시각을 쓰면 같은 D에서도 마감이 뒤로 밀린다. 어느 쪽을 쓸지는 아직 계약에 정해지지 않았다(§10 H-20). 활성화 때 `last_arr_ns`는 0으로 초기화되므로 새 등록의 첫 유효 게시에는 이전 등록과의 간격 검사가 적용되지 않는다. 다만 새 등록에 이미 더 최근 입력을 게시했다면 원래 시각의 재게시도 E_INVAL이 될 수 있으며, 이후 MIT 검사는 새 등록에서 관측한 도달 시각 순서를 따른다.
-5. **post 컨텍스트.** 같은 source에 대한 post는 한 번에 한 스레드가 한다(§3.4). 입력 스레드가 여럿이면 post 호출만 앱이 직렬화한다. 잠금은 포스터 쪽에만 두고 워커는 잠그지 않는다.
+5. **post 컨텍스트.** 같은 source에 대한 post는 한 번에 한 스레드가 한다(§3.4). 입력 스레드가 여럿이면 post 호출만 앱이 직렬화한다. 잠금은 게시자 쪽에만 두고 워커는 잠그지 않는다.
 6. **wait point와 Job 안의 블로킹.** 워커의 wait point는 `ttsched_evt_wait()` 하나다. Job 안의 블로킹(경합이 있는 뮤텍스 잠금, 블로킹 I/O(가득 찬 파이프나 터미널 출력 포함), `sleep`, 응답을 기다리는 동기 호출)은 허용되며 관측되어 응답 시간에 포함된다. 다만 수용식(§3.6)은 블로킹하지 않는 Job에만 보장하므로, 샘플 앱 가이드는 이를 피하도록 안내한다. 로그 출력도 Job 밖에서 하도록 안내한다. 워커가 명시적 Event 연결 없이 소켓이나 타이머를 직접 읽어도 CBS 예산 관리는 유지되지만 Event/Job 관리의 정보는 얻지 못한다(§8.3).
 7. **Job 끝내기.** 처리가 끝나면 `ttsched_evt_done()`을 반드시 부른다. 암묵적 완료는 없다. 처리하지 않기로 한 Event는 DISCARDED로 끝낸다. 이것은 정책상 폐기이며 성공이 아니다. 마감 이전이면 실패도 아니고, 이후이면 실패다. 열린 Job이 있는 채로 wait를 부르면 E_STATE이며 프로그래밍 오류다.
 8. **오류 처리.** `ttsched_evt_wait()`가 E_INACTIVE이면 짧은 back-off(후보 10 ms)가 끝난 뒤 반환하므로, 호출자는 `ttsched_init()` 후 다시 wait한다. 워커 쪽에는 앱 큐가 없다. 대기 중인 Event는 공통 경로가 가진다. 재시작을 넘어 남는 워커 쪽 항목은 없다.
@@ -844,10 +844,10 @@ for (;;) {
 | 1. 소스와 경계 선언 | 네 요소를 앱에서 찾는다. **Event source**: 무엇이 Event를 만드는가. **입력 어댑터 경계**: Event가 앱 코드에 처음 보이는 지점(콜백, 읽기 완료). **워커**: Event를 처리하는 스레드 하나(`task_id`). **Job**: wait에서 Event를 받은 때부터 done까지. 한 태스크에 종류가 여럿이면 §8.3의 "P1 처리" 표를 따른다 | `task_id`, 경계 위치(파일과 함수) |
 | 2. t_arr를 찍는 지점 정하기 | 도달 시각을 찍는 지점을 정한다. 수신 콜백 진입이나 datagram 읽기 완료 직후가 맞다. 이 지점 이후의 지연(큐잉, 깨움, 처리 전 지연)은 모두 $D$를 쓴다. 지점에서 post하지 못하면 그 시차를 준 `t_arr`에 넣고 그만큼 $D$가 준다 | 지점 코드, `t_arr` 출처 |
 | 3. 데이터를 인라인에 맞추기 | payload는 64바이트 이하다. 큰 데이터에 대한 참조를 넣지 않는다. 수명 계약이 없다(P2, F-13). 예: `RadarTarget`은 16바이트다 | 메시지 구조체 크기 |
-| 4. post 직렬화 | source당 post 컨텍스트는 하나다. 입력 스레드가 여럿이면 post 호출만 직렬화한다(잠금은 포스터 쪽). 생산자 스레드는 기준 생산자 구성 (REQ-008 A-10)을 따른다. 대상 구성에서 $L_{post}$를 측정해 TIM-011 상한 이내인지 확인한다. | 입력 스레드 수와 직렬화 방법 |
+| 4. post 직렬화 | source당 post 컨텍스트는 하나다. 입력 스레드가 여럿이면 post 호출만 직렬화한다(잠금은 게시자 쪽). 게시자 스레드는 기준 게시자 구성 (REQ-008 A-10)을 따른다. 대상 구성에서 $L_{post}$를 측정해 TIM-011 상한 이내인지 확인한다. | 입력 스레드 수와 직렬화 방법 |
 | 5. 워커 루프와 폐기 정책 | wait → process → done 루프를 쓴다. 처리 중 블로킹(잠금 경합, 로그 출력, sleep)을 없앤다. DISCARDED로 끝낼 조건을 정한다 | 수정된 워커 루프 |
 | 6. 파라미터와 수용 판정 | MIT, C, D, T를 정하고 $0 < C \le D \le MIT$, $T \le MIT$를 확인한다. §3.6의 수용식으로 판정한다. 거부되면 D를 MIT 안에서 늘리거나, CPU의 다른 L2 태스크를 줄이거나, 다른 CPU로 옮기거나, C를 측정값에 맞춰 낮춘다(측정 최댓값보다 작게 선언하지 않는다) | `SchedInfo` 항목, 수용 판정 결과 |
-| 7. 검증 | **정상 구동**: 폴트 0건(MIT_VIOLATION이 나오면 위 파라미터 기준의 MIT가 낙관적이다). Job 기록 수(워커가 끝낸 기록과 TIMPANI가 닫은 기록의 합) = `accepted`(포스터가 죽지 않은 구간), 정지 상태에서 `accepted = started + cancelled-before-start + queued`, 워커가 끝낸 모든 Job 기록에서 $t_{end} - t_{arr} \le D$이고 `missed` 없음, `budget_used_us`(제안 필드, 구현 전에는 쓸 수 없음)의 최댓값이 C 이하이고 워커가 다음 도달 전에 실제로 수면, `overflow` 0. **이상 주입**: 실행 시간 초과 → BUDGET_EXCEED와 스로틀, 짧은 간격 도달 → MIT_VIOLATION. 두 경우 모두 L1 TT 지터와 다른 L2 태스크가 영향을 받지 않음을 본다 | 검증 기록(AC-008-01~07, 13~16 대응) |
+| 7. 검증 | **정상 구동**: 폴트 0건(MIT_VIOLATION이 나오면 위 파라미터 기준의 MIT가 낙관적이다). Job 기록 수(워커가 끝낸 기록과 TIMPANI가 닫은 기록의 합) = `accepted`(게시자가 죽지 않은 구간), 정지 상태에서 `accepted = started + cancelled-before-start + queued`, 워커가 끝낸 모든 Job 기록에서 $t_{end} - t_{arr} \le D$이고 `missed` 없음, `budget_used_us`(제안 필드, 구현 전에는 쓸 수 없음)의 최댓값이 C 이하이고 워커가 다음 도달 전에 실제로 수면, `overflow` 0. **이상 주입**: 실행 시간 초과 → BUDGET_EXCEED와 스로틀, 짧은 간격 도달 → MIT_VIOLATION. 두 경우 모두 L1 TT 지터와 다른 L2 태스크가 영향을 받지 않음을 본다 | 검증 기록(AC-008-01~07, 13~16 대응) |
 
 **파라미터를 정하는 기준.**
 
@@ -896,7 +896,7 @@ C에 들어가는 것과 들어가지 않는 것은 BPF의 예산 차감 기준�
 | 스트림 소켓(TCP 등) | 수신 스레드가 프레이밍을 마친 메시지 | 메시지마다 게시 | Event 연결 | 송신자 규격 | 메시지 경계(프레이밍)는 앱이 정한다. 경계가 없으면 Event를 정의할 수 없다 |
 | 타이머(timerfd 등 앱 타이머) | 타이머 만료를 읽은 스레드 | 만료마다 게시. `t_arr`는 만료 시각(타이머 클록) | 타이머 스레드가 명시적으로 게시. 워커가 `read(timerfd)`만 직접 하면 Event/Job 관리의 정보를 얻지 못함 | 타이머의 최소 간격 | 엄격한 주기 작업은 L2가 아니라 L1 TT로 선언한다 |
 | pipe, eventfd | 메시지를 읽은 리더 스레드 | 메시지마다 게시. eventfd의 카운터 값 n은 n번 게시한다. 한 건으로 합치면 Event의 정의가 바뀌므로 명시한다 | Event 연결 | 쓰는 쪽의 최소 간격 | 파이프가 가득 차면 쓰는 쪽이 블로킹한다. 쓰는 쪽이 Job 안에 있는지 확인한다 |
-| 프로세스 내부 큐(다른 스레드가 만든 작업) | 생산 스레드가 작업을 만드는 지점 | 생산 스레드가 게시한다(공통 큐 사용, 앱 큐 없음) | Event 연결 | 생산 스레드의 작업 생성 최소 간격 | 생산 스레드가 여럿이면 게시 직렬화가 필요하다(다중 생산자는 P2) |
+| 프로세스 내부 큐(다른 스레드가 만든 작업) | 생산 스레드가 작업을 만드는 지점 | 생산 스레드가 게시한다(공통 큐 사용, 앱 큐 없음) | Event 연결 | 생산 스레드의 작업 생성 최소 간격 | 생산 스레드가 여럿이면 게시 직렬화가 필요하다(다중 게시자는 P2) |
 | 선행 태스크의 완료(L1 TT 또는 다른 L2의 출력) | 선행 태스크가 출력을 공유 메모리나 큐에 쓴 직후 | 선행 태스크 스레드(또는 SHM 쓰기 권한이 있는 같은 호스트의 프로세스)가 게시 | Event 연결 | 선행이 TT이면 주기 − 완료 시점 흔들림 | 게시 비용(후보 1–2 µs)은 선행 태스크의 WCET에 넣는다. 선·후행의 자동 연계(어댑터 D)는 P2 |
 | 하드웨어 입력(GPIO 에지, UIO, input 장치) | 커널이 넘긴 fd를 읽는 사용자 스레드 | 읽은 이벤트마다 게시 | 사용자 스레드가 명시적으로 게시. 워커가 `read()`만 직접 하면 Event/Job 관리의 정보를 얻지 못함 | 디바운스 간격, 센서의 최대 발생률 | 인터럽트 처리 자체는 대상이 아니다. 대상은 그 뒤의 사용자 스레드다. 커널 시각을 `t_arr`로 쓰려면 측정이 필요하다 |
 | 하한이 불분명한 Event(진단 요청, 사용자 입력) | 수신 지점 | 수신마다 게시 | Event 연결 | 설계값: "이 간격까지는 마감을 보장한다" | 선언보다 촘촘한 도달은 MIT_VIOLATION으로 계수되고 뒤의 Job이 늦는다. 큐가 차면 E_FULL로 버리고 두 쪽이 버린 수를 센다 |
@@ -941,7 +941,7 @@ FCW 예제는 §8.3의 "미들웨어 메시지 콜백" 행이다. 아래는 §8.
 | `fcw_consumer.cpp`, `mock_radar_producer.cpp` — include | `<timpani_rt.h>`를 include한다. 생산자는 `<libttsched.h>`도 include한다 | 소비자는 `<timpani_rt.h>`를 `<libttsched.h>`로 바꾸고 `<queue>`, `<mutex>`, `<condition_variable>`을 뺀다. 생산자는 `<timpani_rt.h>` 줄을 지운다 |
 | `fcw_consumer.cpp` — 초기화(`main`) | `timpani_rt_init()`, `timpani_evt_register("fcw_workload", "cbs_task", "0x1024", "0x0001", "0x8001", 18000)` | 두 호출을 지운다. 워커 스레드를 만들기 전에 `g_src = ttsched_evt_open("cbs_task")`를 한 번 부른다. MIT 18000은 코드가 아니라 워크로드 선언(YAML)에 둔다. vsomeip 구독 코드는 그대로 둔다 |
 | `fcw_consumer.cpp` — 수신(`on_obstacle_alert_received`) | `timpani_evt_mark_arrival(...)`, `cbs_mtx` 잠금, `cbs_queue.push`, `cbs_cv.notify_one()` | 핸들러 첫 문장에서 잠금 앞에 `t_arr`를 재고(잠금 대기가 응답 시간에 들어가게 한다), `RadarTarget`을 읽은 뒤 `ttsched_evt_post(g_src, t_arr, &target, sizeof(target), NULL)`을 부른다. 같은 source의 post가 여러 스레드에서 불리면 `t_arr` 순서가 어긋나 E_INVAL이 날 수 있으므로, 핸들러가 한 스레드에서만 불린다는 H-8 확인을 이 절의 전제로 한다. 확인 전에는 E_INVAL을 앱 통계로 센다. 반환값: 0이면 수락, E_FULL이면 앱 넘침 통계를 올리고 버린다, E_INACTIVE이면 `ttsched_init()` 후 버린다. `timpani_evt_mark_arrival`과 큐·잠금·조건 변수 호출은 지운다. `--wakeup-delay-ms`는 post 전에 넣는다(아래 (3) 참조) |
-| `fcw_consumer.cpp` — 큐 | `std::queue` + `std::mutex cbs_mtx` + `std::condition_variable cbs_cv`. 수신과 워커가 같은 잠금을 잡는다 | **삭제**한다. 공통 Event 큐가 그 역할을 맡는다. 포스터 쪽 직렬화는 vsomeip 핸들러가 한 스레드에서만 불리는지에 달려 있다. 여러 스레드에서 불릴 수 있으면 핸들러 쪽에만 잠금을 두고 워커는 잠그지 않는다(열린 질문 H-8) |
+| `fcw_consumer.cpp` — 큐 | `std::queue` + `std::mutex cbs_mtx` + `std::condition_variable cbs_cv`. 수신과 워커가 같은 잠금을 잡는다 | **삭제**한다. 공통 Event 큐가 그 역할을 맡는다. 게시자 쪽 직렬화는 vsomeip 핸들러가 한 스레드에서만 불리는지에 달려 있다. 여러 스레드에서 불릴 수 있으면 핸들러 쪽에만 잠금을 두고 워커는 잠그지 않는다(열린 질문 H-8) |
 | `fcw_consumer.cpp` — 워커(`cbs_worker_loop`) | `cbs_cv.wait`로 대기 → 한 건 처리. 처리 앞뒤로 `timpani_cbs_bind_thread` / `unbind`. 처리 전 `wakeup_delay_ms` 수면 | `pthread_setname_np(…, "cbs_task")`는 유지하고 `ttsched_init()`을 추가한다. 루프는 `ttsched_evt_wait(&ev)` → 처리 → `ttsched_evt_done(COMPLETED)`. E_INACTIVE이면 `ttsched_init()` 후 재시도한다(§8.1 8항). `bind`/`unbind`와 워커 안의 수면은 지운다. Job 경계는 wait가 정하고 바인딩은 TIMPANI가 한다 |
 | `fcw_consumer.cpp` — 워커의 프레임 로그 | 처리 중 `std::cout ... << std::endl` | 워커의 프레임 출력(`std::cout`)을 없앤다. 프레임과 Job의 대응은 Job 로그의 `(gen, seq, t_arr)`로 한다(LLD-008 7.2, L-16). 링 버퍼는 새로 두지 않는다(§8.1 6항) |
 | `fcw_consumer.cpp` — 로컬 판정 | `OVER_BUDGET`, `DEADLINE_MISS` 문자열(`cpu_ms > 2.0`, `resp_ms > 5.0`) | 보조 로그로만 남긴다. 판정 기준은 TIMPANI-N의 폴트와 Job 기록이다. 앱의 `resp`도 $t_{arr}$부터 재므로 정의는 같지만 읽는 시점이 달라 차이가 난다 |
@@ -1035,7 +1035,7 @@ FCW 예제는 §8.3의 "미들웨어 메시지 콜백" 행이다. 아래는 §8.
 | R-18 | 워커가 시계를 읽은 뒤 전이를 게시하기 전에 선점되면, 정시로 기록된 Job이 실제로는 $t_{dl}$ 뒤에 게시될 수 있다(허용 오차, §4.8) | 정시 판정이 실제 게시보다 빠르게 기록될 수 있다 | 오차의 상한은 첫 모니터 검사 시점이다(게시가 그보다 늦으면 전이가 실패하고 재시계 읽기로 바뀐다). 측정 항목에 선점 구간 길이를 포함한다 |
 | R-19 | FCW 기본값을 바꾼다(period 20 → 18 ms). 승인 전에는 MIT 필드가 없어 MIT가 `period`로 정해지므로 값이 같다 | 설정 불일치 시 수용 판정 거부 또는 MIT 낙관 | §8.4 (2) 12번과 (4)에 변경 근거를 적는다. 워크로드 YAML에 T ≤ MIT를 검사하는 항목을 둔다 |
 | R-20 | SHM 객체를 쓸 수 있는 모든 프로세스를 신뢰한다(P1). 잘못 쓰는 프로세스는 임의 슬롯을 깨뜨릴 수 있다 | 데이터 무결성, 다른 source의 큐 손상 | 객체 모드 0660과 그룹은 채택하지 않는다(9209bc5의 0666 결정 유지, trust 문서화). 객체 격리는 P2(F-14) |
-| R-21 | 같은 source에 post가 동시에 들어온다(posting context 위반). libttsched는 감지하지 않는다 | 그 source의 큐만 손상 | 앱 직렬화 규칙(§3.4, §8.1 5항). 다중 생산자는 P2(F-13) |
+| R-21 | 같은 source에 post가 동시에 들어온다(posting context 위반). libttsched는 감지하지 않는다 | 그 source의 큐만 손상 | 앱 직렬화 규칙(§3.4, §8.1 5항). 다중 게시자는 P2(F-13) |
 | R-22 | DeadlineMonitor와 Replenisher를 한 스레드로 합칠 때 우선순위 역전이나 스캔 지연 증가 | RT 바운드 | P1은 별도 스레드. 병합은 F-12로 PoC 뒤에 검토 |
 
 ---
@@ -1059,7 +1059,7 @@ REQ-008 §11, SRS-008 §9, DDR-008 §3.3을 참조한다. HLD 수준 항목은 �
 | H-11 | **해석**: TIMPANI가 닫은 Job(CANCELLED, ABANDONED)도 마감 이전에 닫혔으면 실패가 아니라는 규칙. amendment는 마감 전 명시적 폐기·취소를 말하며, TIMPANI 종료에 같은 규칙을 적용하는 것은 해석이다 |
 | H-12 | **측정**: DeadlineMonitor 스캔 비용과 지터(1 kHz RT 스레드, TT 부하 아래, 선택한 CPU). 이벤트 기반 깨움(F-10)이 필요한지 판단. PoC 항목 |
 | H-13 | **측정**: 보충 kick 경로(R-1, OI-9)와 kick 직후 TT 경계 영향(R-11). 기존 PoC 항목 |
-| H-14 | **측정**: 게시 비용과 $L_{post}$(기준 생산자 구성에서의 상한, A-10), 같은 CPU의 여러 L2 태스크에서 $\delta_{ovr}$, 수용식의 여유(§8.5 (b)의 400 µs)가 측정 값으로 성립하는지. FCW 예제의 기준 생산자 구성(입력 콜백 스레드의 정책·배치)도 정한다 |
+| H-14 | **측정**: 게시 비용과 $L_{post}$(기준 게시자 구성에서의 상한, A-10), 같은 CPU의 여러 L2 태스크에서 $\delta_{ovr}$, 수용식의 여유(§8.5 (b)의 400 µs)가 측정 값으로 성립하는지. FCW 예제의 기준 게시자 구성(입력 콜백 스레드의 정책·배치)도 정한다 |
 | H-15 | 기능 승인: 예제 설정 변경 — FCW `period` 18 ms(T ≤ MIT)과 FCW 조합 시 D 6 ms(§8.4, §8.5). 예제 설정 변경은 Project Leader 판단 |
 | H-16 | 데몬 하트비트와 SHM 객체의 source별 격리(F-14). 데몬 중단 중 감지 공백(R-16)을 메울 수단 |
 | H-17 | 블로킹 Job(A-06 수용 판정 가정 4)의 보장 방법을 P2에서 검토한다. 현재는 수용식이 보장하지 않는다고만 적으며 별도 앱 분류를 정하지 않는다 |
@@ -1074,7 +1074,7 @@ REQ-008 §11, SRS-008 §9, DDR-008 §3.3을 참조한다. HLD 수준 항목은 �
 - BPF: EDF 큐 순위(`scx_bpf_dsq_insert_vtime`, D-08 P2), `WAKEUP_LATENCY_EXCEED`(예약).
 - O: $sbf/dbf$ 정밀 수용 판정, 태스크 단위 시간 클래스(기존 Periodic/Sporadic 선언 범위), 거부 사유 코드, epoch 유지와 영향 노드 발행. 명시적 Event 연결 여부는 앱 분류로 쓰지 않는다.
 - N: diff 기반 테이블 적용(TT 무교란), NodeStatus 통계, 데몬 하트비트와 중단 중 감지(F-14, R-16), cgroup 기반 식별, DeadlineMonitor와 Replenisher 병합 검토(F-12), 이벤트 기반 모니터 깨움(F-10).
-- LIB: P1 시그니처는 유지한다. 추가 후보는 태스크당 다중 source를 위한 `ttsched_evt_open`의 source 지정 변형, 다중 생산자 post와 큰 payload 및 해제 통지(F-13), SHM 객체의 source별 격리(F-14)다. 워크로드 선언의 큐 깊이·payload 크기는 proto가 필요하다(F-11).
+- LIB: P1 시그니처는 유지한다. 추가 후보는 태스크당 다중 source를 위한 `ttsched_evt_open`의 source 지정 변형, 다중 게시자 post와 큰 payload 및 해제 통지(F-13), SHM 객체의 source별 격리(F-14)다. 워크로드 선언의 큐 깊이·payload 크기는 proto가 필요하다(F-11).
 - 관측 어댑터: 미들웨어 경계와 선행 태스크 완료의 **자동** 연결(어댑터 D, ②층에 추가)과 노드 간 E2E 측정(송신 시각)은 P2다. ①과 ③은 바뀌지 않는다.
 
 ---
@@ -1087,4 +1087,4 @@ REQ-008 §11, SRS-008 §9, DDR-008 §3.3을 참조한다. HLD 수준 항목은 �
 | v5 | 2026-11-11 | P1 Event–Job 계약 보강 합의(Issue #53)에 맞춰 정렬. 한 Event 한 Job, 명시적 연결(게시·Event 대기·종료), 절대 마감 $t_{arr} + D$, 공통 Event 큐(SHM v2), DeadlineMonitor 신설, BPF를 실행 구간 관측과 예산 집행으로 한정(MIT 검사와 L2 DMISS 제거), 수용식 한 식과 가정, §8 계약·절차·Event 종류표·FCW 가이드·비-SOME/IP 산술 재작성, 리스크와 오픈 이슈 갱신. 설계 정렬이며 구현이나 검증이 아니다 |
 | v5.1 | 2026-11-16 | 개요(OVERVIEW-008) 리뷰 논의 반영. §8.1 4항에 재바인딩 경계의 재게시 의미(새 `gen`의 별개 Event, `t_arr` 기준 미정) 추가, 9항에서 측정 절차 참조. §8.2에 "C와 MIT 측정 절차"(자극 주입, C 포함·제외 범위, 측정 단계, `budget_used_us` 실행 구간 단위 한계) 추가. §10에 H-19(C 측정·여유율), H-20(재게시 `t_arr`) 추가. 설계 결정 변경은 없음 |
 | v5.2 | 2026-11-16 | 리뷰 반영. §3 표에 D-22·D-24를 반영했다(GlobalScheduler: TT 없는 CPU의 L2 배치·수용 판정, FR-O-022, FR-O-015 표현 주석, TableApplier: 바인딩 전 허용 CPU 확인, FR-N-033, Replenisher·DeadlineMonitor·BPF dispatch: TT 이벤트에 의존하지 않음, FR-N-032·FR-B-025). §7에 D-22~D-24 추가. §8.1 4항 하위 목록 들여쓰기 정정. §8.2: C 등록 범위를 §3.6 수용식에 맞춤, 입력 제어와 재생의 도구 한계, MIT 최소 간격의 관측 방법(`t_arr` 차), C 대조 구간, `budget_used_us` 제안 필드 표시. §8.4 스레드 배치(D-24, A-09). §8.5 AC-008-17 시험 구성. §10 H-8·H-19·H-20 참조 추가. API·프로토콜 변경은 없음(구현·검증 전) |
-| v5.3 | 2026-11-18 | 3e307da(2026-11-17) 변경을 반영했다. 승인·승인식은 수용 판정·수용식으로, post는 게시로 바꾸는 등 용어를 정식 문서와 맞췄다. 예산 전용 L2 class는 CBS 예산 관리와 Event/Job 관리의 책임 구분으로 바꾸었고 class나 플래그는 두지 않는다(D-21). wait 안에서 Job 시작을 확정하며 별도 공개 취득 API는 없다. P1 정책 경계와 워커 TID 불변조건을 추가했고(D-24), 타이머 깨움 대안 비교(F-10, OI-22)를 넣었다. 이 결정들은 Project Leader(작성자)의 결정이다. 2026-11-18 리뷰 정정: 예산 보충 실행 주체를 BPF로 명시하고 D-22 행, Mermaid 라벨, 게시 표현을 정리했다. 이전 이력 행의 용어도 새 용어로 바꿨다. REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, LLD-008 v5.2와 맞춘다. $L_{post}$ 상한(TIM-011)은 기준 생산자 구성에서 TIMPANI가 지키는 요구사항으로 두고, 배포가 그 구성을 만족하는 것을 가정 A-10으로 추가했다 (Project Leader(작성자) 결정). $L_{post}$의 시작점은 $t_{arr}$로 통일했다. |
+| v5.3 | 2026-11-18 | 3e307da(2026-11-17) 변경을 반영했다. 승인·승인식은 수용 판정·수용식으로, post는 게시로 바꾸는 등 용어를 정식 문서와 맞췄다. 예산 전용 L2 class는 CBS 예산 관리와 Event/Job 관리의 책임 구분으로 바꾸었고 class나 플래그는 두지 않는다(D-21). wait 안에서 Job 시작을 확정하며 별도 공개 취득 API는 없다. P1 정책 경계와 워커 TID 불변조건을 추가했고(D-24), 타이머 깨움 대안 비교(F-10, OI-22)를 넣었다. 이 결정들은 Project Leader(작성자)의 결정이다. 2026-11-18 리뷰 정정: 예산 보충 실행 주체를 BPF로 명시하고 D-22 행, Mermaid 라벨, 게시 표현을 정리했다. 이전 이력 행의 용어도 새 용어로 바꿨다. REQ-008 v5.2, SRS-008 v4.2, DDR-008 v3.3, LLD-008 v5.2와 맞춘다. $L_{post}$ 상한(TIM-011)은 기준 게시자 구성에서 TIMPANI가 지키는 요구사항으로 두고, 배포가 그 구성을 만족하는 것을 가정 A-10으로 추가했다 (Project Leader(작성자) 결정). $L_{post}$의 시작점은 $t_{arr}$로 통일했다. |
