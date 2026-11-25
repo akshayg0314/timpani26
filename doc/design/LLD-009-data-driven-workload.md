@@ -6,10 +6,11 @@ SPDX-License-Identifier: MIT
 # LLD-009: Data-Driven Workload — Phase 0 Low-Level Design
 
 **Date:** 2026-10-27
-**Last Updated:** 2026-11-23 (Phase 0 protobuf field-allocation alignment)
-**Status:** Draft — Phase 0 conditional design approval (`OI-DD-01`
-structural approval with 008 field allocation `11/12/13` aligned;
-`OI-DD-02`/`OI-DD-03` conditionally approved; implementation not complete)
+**Last Updated:** 2026-11-25 (Phase 0 PR review remediations)
+**Status:** Draft — Phase 0 design proposal; review and approval pending.
+The 008 field allocation `11/12/13` is aligned, but `OI-DD-01`/`02`/`03`
+remain subject to Project Leader approval and verification; implementation is
+not complete.
 **Parent Baseline:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §6, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md)
 **Design Decisions:** [DDR-009](DDR-009-data-driven-workload.md) `D-DD-P0-01`..`05`, [DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`, `D-P0-06`
 
@@ -21,8 +22,8 @@ This document details only the common DAG data structures, ready/dispatch separa
 
 | Existing Integration Point | Phase 0 Detailed Design Intent | Approval / Compatibility Constraint |
 |:---|:---|:---|
-| `timpani-o/proto/*.proto` | An `optional` Task class override (`protoc >= 3.15`), structured `TaskReference` (`task_id` ↔ `TaskInfo.name`), and common DAG metadata for workload/task hash pairs (`ExecutionModel.DATA_FLOW = 2` is not used) | **`OI-DD-01` structural approval (008 allocation `11/12/13` aligned)** |
-| `sample-apps/src/libttsched.h/c` | A versioned Pipeline extension (`40B` header), packed `ready_state`, a dispatch-only futex, preservation of `void ttsched_init()`, `g_shm_init_errno`, bulk TLS reset and attachment-state separation before/after publication (`g_attached_before_publish`), `release_source`/`current_job_token`/`wait_data`/`signal_ready`, `pipeline_commit_alive`, `atomic_name_equals`, a read-only seqlock, and VFS-free RT validation | **`OI-DD-02` conditionally approved** |
+| `timpani-o/proto/*.proto` | An `optional` Task class override (`protoc >= 3.15`), structured `TaskReference` (`task_id` ↔ `TaskInfo.name`), and common DAG metadata for workload/task hash pairs (`ExecutionModel.DATA_FLOW = 2` is not used) | **`OI-DD-01` approval pending (008 allocation `11/12/13` aligned)** |
+| `sample-apps/src/libttsched.h/c` | A versioned Pipeline extension (`40B` header), packed `ready_state`, a dispatch-only futex, preservation of `void ttsched_init()`, `g_shm_init_errno`, bulk TLS reset and attachment-state separation before/after publication (`g_attached_before_publish`), `release_source`/`current_job_token`/`wait_data`/`signal_ready`, `pipeline_commit_alive`, `atomic_name_equals`, a read-only seqlock, and VFS-free RT validation | **`OI-DD-02` conditional-approval proposal pending** |
 | `timpani-o/src/schedinfo_service.{h,cpp}` | Explicit-over-inherit resolution of `TaskInfo.temporal_class` and safe rollback to the existing workload model when `RegenerateAllSchedules()` fails | Preserve the existing API |
 | `timpani-o/src/global_scheduler.*` | DAG validation, the CBS-only `hyperperiod_us > 0` guarantee, L1→L1 ordering in `place_tt_slots()` through `(topo_rank, deadline_us, ...)` + `min_start`, and separate graph metadata generation | Preserve the existing API |
 | `timpani-n/src/main.cpp` | Local validation and registration of TT/CBS entries with common graph metadata, rejection of `ExecutionModel.DATA_FLOW` (`EINVAL`), and transfer of CBS/Pipeline metadata through a `TimerMaster::set_schedule_table()` overload | No per-layer feasibility recalculation |
@@ -149,7 +150,7 @@ The `publication_guard` in the extension header closes the TOCTOU window between
   - A read-only consumer (an ordinary TT Task or a Sink/read-only Successor) maps with `O_RDONLY` + `PROT_READ` and can normally call `ttsched_wait_data()` and `ttsched_current_job_token()` (using the read-only seqlock without writing `publication_guard`), while calls to `ttsched_signal_ready()` or `ttsched_release_source()` return `EACCES`.
   - Only `Timpani-N` owns the SHM create/`ftruncate()`/`shm_unlink()` lifecycle. The standard permission model for production deployment of `/dev/shm/timpani_ttsched` is **owner UID `timpani-n` (`rw-`) plus POSIX ACL/dedicated-group separation (`g:timpani-pub:rw-` for trusted writer containers, `g:timpani-sub:r--` for ordinary TT and read-only Successor/Sink containers, and other `---`)**. In a lightweight environment without ACL support, apply equivalent isolation using `0660` + the `timpani-pub` group and container mounts/read-only binds. The existing PoC mode `0666` is restricted to local regression testing and is not considered a production ABI contract.
   - **Phase 0 trust boundary**: Because `O_RDWR`/`PROT_WRITE` maps the entire SHM, members of the `timpani-pub` group can also modify the header and other Task slots at the OS level. This group MUST contain only mutually trusted cooperative writers. The self-slot/generation checks in `libttsched` detect accidental misuse and corruption; they do not isolate a malicious writer or guarantee memory integrity. Untrusted workloads MUST use the read-only path in `timpani-sub`. Per-slot capabilities, per-slot SHM, and strong isolation through a kernel mediator are outside Phase 0.
-- Public API signatures *(conditionally approved, `OI-DD-02`)*:
+- Public API signatures *(conditional-approval proposal pending, `OI-DD-02`)*:
   ```c
   void ttsched_init(void);                            /* Preserve existing signature (failure cause retained in g_shm_init_errno) */
   int ttsched_wait_next_period(void);                 /* Existing TT API, unchanged */
@@ -1276,7 +1277,7 @@ message TaskInfo {
   // Field 11 is owned by the 008 Event-Driven extension.
   uint32 min_inter_arrival_us = 11;
   // 008 reserved field 12 for this per-Task override.
-  // If absent, inherit SchedInfo.temporal_class.
+  // Explicit value 0 selects L1; only absence inherits.
   optional TemporalClass temporal_class = 12;
   repeated TaskReference predecessors = 13;
 }
@@ -1303,18 +1304,21 @@ message HierarchicalScheduleTable {
 }
 ```
 
-The `TaskInfo` allocation is fixed as `11`/`12`/`13`. Field `11` remains the
-008-owned `min_inter_arrival_us`, field `12` uses the 008 reservation for
-the same per-Task `temporal_class` semantics, and field `13` holds
-`predecessors`. Keep `HierarchicalScheduleTable.pipeline_tasks = 6`. This
-resolves the wire-number collision but does not by itself approve moving the
-Task-level class override into Phase 0 or applying the schema change.
+The `TaskInfo` allocation is proposed as `11`/`12`/`13`. Field `11` remains the
+008-owned `min_inter_arrival_us`, field `12` uses the 008 reservation for the
+per-Task `temporal_class`, and field `13` holds `predecessors`. Keep
+`HierarchicalScheduleTable.pipeline_tasks = 6`. This resolves the wire-number
+collision but does not by itself approve moving the Task-level class override
+into Phase 0 or applying the schema change.
 
 Interpret `TaskReference.task_id` as an exact 1:1 match with
 `TaskInfo.name` (field 1). Retain `SchedInfo.temporal_class` as the existing
 workload default. Because O must detect the presence of
 `TaskInfo.temporal_class`, use `proto3 optional` (`protoc >= 3.15`) rather
-than a plain enum.
+than a plain enum. The proposed presence rule supersedes the 008 P2 placeholder
+`0 = inherit`: explicit `TEMPORAL_PERIODIC = 0` selects L1, while only an absent
+field inherits. Adopting that semantic change is part of the required
+`CON-DD-05` approval.
 
 `PIPELINE_TRIGGER_ALL` is the sole valid trigger-enum value in Phase 0.
 Retain `ExecutionModel.DATA_FLOW = 2`, already defined in

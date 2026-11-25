@@ -6,10 +6,10 @@ SPDX-License-Identifier: MIT
 # HLD-009: Data-Driven Workload — Phase 0 상위 레벨 아키텍처 설계
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
-필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 현재
-구현의 충족 선언 아님)
+**최종 수정:** 2026-11-25 (Phase 0 PR 리뷰 반영)
+**상태:** Draft — Phase 0 설계안, 검토·승인 대기.
+008 필드 `11/12/13`은 정합되었으나 `OI-DD-01`/`02`/`03`은 Project Leader
+승인과 검증 전이며 현재 구현이 설계를 충족한다는 선언이 아니다.
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)  
 **결정/상세:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -73,7 +73,7 @@ flowchart LR
 
 ### 3.1 H-DD-P0-01 — 오프라인 후보 검증과 결정적 위상 배치 (`Timpani-O`)
 
-O는 `TaskInfo.temporal_class` 명시값을 우선하고, 미지정이면 `SchedInfo.temporal_class`를 상속해 각 Task의 실행 계층을 결정한다. `TaskReference(workload_id, task_id)` 선행 목록을 같은 workload의 정규화 Task 식별자로 변환하고 DAG를 검증한 뒤, `(workload_id_hash, task_id_hash)` key별 공통 의존성 메타를 만든다. 각 Task는 resolved class에 따라 기존 `TtSlot` 또는 `CbsConfig` 표현을 유지하며 `predecessors` 유무로 실행 계층을 추론하지 않는다.
+O는 `TaskInfo.temporal_class` 명시값을 우선하고, optional 필드가 없을 때만 `SchedInfo.temporal_class`를 상속해 각 Task의 실행 계층을 결정한다. 명시적 `TEMPORAL_PERIODIC = 0`은 L1을 선택하며, 이는 008 placeholder `0 = inherit`를 대체하므로 `CON-DD-05` 승인이 필요하다. `TaskReference(workload_id, task_id)` 선행 목록을 같은 workload의 정규화 Task 식별자로 변환하고 DAG를 검증한 뒤, `(workload_id_hash, task_id_hash)` key별 공통 의존성 메타를 만든다. 각 Task는 resolved class에 따라 기존 `TtSlot` 또는 `CbsConfig` 표현을 유지하며 `predecessors` 유무로 실행 계층을 추론하지 않는다.
 
 Phase 0는 같은 workload 참조와 `ALL`만 허용하고 기존 TT slot/CBS admission 정책을 사용한다. Phase 1에는 cross-workload 참조, 혼합 DAG의 계층별 응답시간 합산, `E2E`, Window/Gap 조건을 확장한다. 실패 시 확정 모델은 유지한다.
 

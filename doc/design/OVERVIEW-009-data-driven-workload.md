@@ -9,8 +9,8 @@ SPDX-License-Identifier: MIT
 |:--|:--|
 | Purpose | Briefly explain what the Data-Driven Workload is for, how it executes, and what it currently supports |
 | Audience | Architecture, scheduler, application, and verification personnel |
-| Baseline | REQ/SRS/DDR/HLD/LLD-009 Phase 0 design proposal updated for 2026-11-23 field-allocation consistency, and related documents 008 and 011 |
-| Status | **Draft — Phase 0 conditional design approval** (`OI-DD-01` structurally approved with 008 field allocation `11/12/13` aligned; `OI-DD-02`/`OI-DD-03` conditionally approved; implementation not complete) |
+| Baseline | REQ/SRS/DDR/HLD/LLD-009 Phase 0 design proposal updated for 2026-11-25, and related documents 008 and 011 |
+| Status | **Draft — Phase 0 design proposal; approval pending** (008 field allocation `11/12/13` aligned; `OI-DD-01`/`02`/`03` remain subject to Project Leader approval and verification; implementation not complete) |
 
 > **One-Sentence Summary:** Once all required predecessor work is complete, a successor Task becomes an execution candidate. The Task's original TT or CBS rules determine the actual execution time.
 
@@ -309,12 +309,12 @@ Host unit tests and actual Linux `sched_ext` target tests are distinguished. Ite
 
 | Decision | Phase 0 Status / Follow-On Review Question |
 |:--|:--|
-| **Pipeline Declaration Format (`OI-DD-01`)** | **Structurally approved (008 field allocation `11/12/13` aligned; schema application still requires CON-DD-05 approval)** — `TaskInfo.min_inter_arrival_us = 11`, `TaskInfo.temporal_class = 12`, `predecessors = 13`; explicit-first `optional TaskInfo.temporal_class` with inheritance, same-workload `TaskReference` (node-unique `1..15`B ASCII `task_id` ↔ `TaskInfo.name`, reject duplicate predecessors), `(workload_id_hash, task_id_hash)` common metadata, `ExecutionModel.DATA_FLOW` unused/rejected in Phase 0 |
-| **Shared Memory/API (`OI-DD-02`)** | **Conditionally approved** — add a `40B` extension header (`instance_id`/`origin_epoch_ns`/`hyperperiod_us`) and `pipeline[]` after the 784B prefix; `ttsched_current_job_token()` reads the Source activation token stamped by L1 `Timer Master`/L2 `ttsched_release_source()`; read-only seqlock `wait_data()` (atomic name comparison, FIFO, spurious-wake safe); `signal_ready()` (in-flight `pipeline_commit_alive`, generation-mismatch `ESTALE`); preserve `void ttsched_init()` with `g_shm_init_errno` and pre/post-publication attachment-cursor separation; non-RT `fstat()` plus RT no-VFS atomic validation; `publication_guard` (`min(5 ms, H/4)`/`50 ms` Safe Abandonment); DAC/POSIX ACL and trusted-writer-group validation conditions |
-| **TT/CBS Execution Connection (`OI-DD-03`)** | **Conditionally approved** — after an L1 TT slot checks `pending`, perform `update_current_slot()`, `dispatch_counter++`, and `FUTEX_WAKE` (omit all when `pending == false`, prohibit `SLOT_NONE` overwrite, kernel BPF `ops.enqueue()` handles kick); after L2 `ALL` fan-out commit, apply the CBS budget/Gap gate; conditional on mixed-combination, partial-input, and prevalidation tests |
+| **Pipeline Declaration Format (`OI-DD-01`)** | **Approval pending (proposed)** — `TaskInfo.min_inter_arrival_us = 11`, `TaskInfo.temporal_class = 12`, `predecessors = 13`; explicit-first `optional TaskInfo.temporal_class` with inheritance only when absent. Explicit `TEMPORAL_PERIODIC = 0` selects L1 and supersedes the 008 P2 placeholder `0 = inherit`; `CON-DD-05` must approve that semantic change and schema incorporation. Use same-workload `TaskReference` (node-unique `1..15`B ASCII `task_id` ↔ `TaskInfo.name`, reject duplicate predecessors), `(workload_id_hash, task_id_hash)` common metadata, and keep `ExecutionModel.DATA_FLOW` unused/rejected in Phase 0 |
+| **Shared Memory/API (`OI-DD-02`)** | **Approval pending (proposed conditional contract)** — add a `40B` extension header (`instance_id`/`origin_epoch_ns`/`hyperperiod_us`) and `pipeline[]` after the 784B prefix; `ttsched_current_job_token()` reads the Source activation token stamped by L1 `Timer Master`/L2 `ttsched_release_source()`; read-only seqlock `wait_data()` (atomic name comparison, FIFO, spurious-wake safe); `signal_ready()` (in-flight `pipeline_commit_alive`, generation-mismatch `ESTALE`); preserve `void ttsched_init()` with `g_shm_init_errno` and pre/post-publication attachment-cursor separation; non-RT `fstat()` plus RT no-VFS atomic validation; `publication_guard` (`min(5 ms, H/4)`/`50 ms` Safe Abandonment); DAC/POSIX ACL and trusted-writer-group validation conditions |
+| **TT/CBS Execution Connection (`OI-DD-03`)** | **Approval pending (proposed conditional contract)** — after an L1 TT slot checks `pending`, perform `update_current_slot()`, `dispatch_counter++`, and `FUTEX_WAKE` (omit all when `pending == false`, prohibit `SLOT_NONE` overwrite, kernel BPF `ops.enqueue()` handles kick); after L2 `ALL` fan-out commit, apply the CBS budget/Gap gate; conditional on mixed-combination, partial-input, and prevalidation tests |
 | **Subsequent Timing and Recovery Contract (`OI-DD-04` through `08`)** | **Open in Phase 1/2** — mixed-DAG `E2E`, `Activation Window`, Pipeline updates, and criteria for `SKIP`, `DATA_TIMEOUT`, Fallback, and restart recovery |
 
-In Phase 0, verify **basic mixed L1/L2 chain operation without changing Task class**. Merge of the conditional approval items in the table (`OI-DD-02`, `OI-DD-03`) is held until the specified validation tests pass; apply later-phase protocol, SHM, and public API changes only after Project Leader approval.
+In Phase 0, verify **basic mixed L1/L2 chain operation without changing Task class**. The approval-pending proposals in the table (`OI-DD-01`, `OI-DD-02`, and `OI-DD-03`) are not merge approvals. Apply their protocol, SHM, and public API changes only after Project Leader approval and the specified validation tests.
 
 ---
 
@@ -327,7 +327,7 @@ In Phase 0, verify **basic mixed L1/L2 chain operation without changing Task cla
 | [DDR-009](DDR-009-data-driven-workload.md) | To verify design decisions and their rationale |
 | [HLD-009](HLD-009-data-driven-workload.md) | To verify responsibilities and the overall O, N, and application flow |
 | [LLD-009](LLD-009-data-driven-workload.md) | To verify structures, states, algorithms, and implementation order |
-| [OVERVIEW-008](OVERVIEW-008-event-driven-workload-support.md) | To compare the boundary with the Event-Driven model |
+| [OVERVIEW-008 (Korean)](kor/OVERVIEW-008-event-driven-workload-support.md) | To compare the boundary with the Event-Driven model |
 | [REQ-011](REQ-011-runtime-table-update.md) / [DDR-011](DDR-011-runtime-table-update.md) | To compare runtime table update and lifecycle constraints |
 
 **Recommended Reading Order:** Overview → REQ → DDR → HLD → SRS → LLD. Consult 008 and 011 together when addressing common SHM, runtime update, and shutdown contracts.

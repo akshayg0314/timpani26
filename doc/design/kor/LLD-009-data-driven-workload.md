@@ -6,10 +6,10 @@ SPDX-License-Identifier: MIT
 # LLD-009: Data-Driven Workload — Phase 0 상세 설계
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
-필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료
-아님)
+**최종 수정:** 2026-11-25 (Phase 0 PR 리뷰 반영)
+**상태:** Draft — Phase 0 설계안, 검토·승인 대기.
+008 필드 `11/12/13`은 정합되었으나 `OI-DD-01`/`02`/`03`은 Project Leader
+승인과 검증 전이며 구현 완료가 아니다.
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §6, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md), [HLD-009](HLD-009-data-driven-workload.md)  
 **설계 결정:** [DDR-009](DDR-009-data-driven-workload.md) `D-DD-P0-01`..`05`, [DDR-011](DDR-011-runtime-table-update.md) `D-P0-05`, `D-P0-06`
 
@@ -21,8 +21,8 @@ SPDX-License-Identifier: MIT
 
 | 기존 접점 | Phase 0 상세 설계 의도 | 승인·호환 제약 |
 |:---|:---|:---|
-| `timpani-o/proto/*.proto` | `optional` Task class override(`protoc >= 3.15`), 구조화 `TaskReference`(`task_id` ↔ `TaskInfo.name`), workload/task hash 쌍 공통 DAG metadata(`ExecutionModel.DATA_FLOW = 2` 미사용) | **`OI-DD-01` 구조 승인(008 배정 `11/12/13` 정합 완료)** |
-| `sample-apps/src/libttsched.h/c` | versioned Pipeline extension(`40B` 헤더), packed `ready_state`, dispatch-only futex, `void ttsched_init()` 유지·`g_shm_init_errno`·TLS 일괄 리셋·게시 전/후 attach 분리(`g_attached_before_publish`), `release_source`/`current_job_token`/`wait_data`/`signal_ready`, `pipeline_commit_alive`, `atomic_name_equals`, 읽기 전용 seqlock 및 무-VFS RT 검증 | **`OI-DD-02` 조건부 승인** |
+| `timpani-o/proto/*.proto` | `optional` Task class override(`protoc >= 3.15`), 구조화 `TaskReference`(`task_id` ↔ `TaskInfo.name`), workload/task hash 쌍 공통 DAG metadata(`ExecutionModel.DATA_FLOW = 2` 미사용) | **`OI-DD-01` 승인 대기(008 배정 `11/12/13` 정합 완료)** |
+| `sample-apps/src/libttsched.h/c` | versioned Pipeline extension(`40B` 헤더), packed `ready_state`, dispatch-only futex, `void ttsched_init()` 유지·`g_shm_init_errno`·TLS 일괄 리셋·게시 전/후 attach 분리(`g_attached_before_publish`), `release_source`/`current_job_token`/`wait_data`/`signal_ready`, `pipeline_commit_alive`, `atomic_name_equals`, 읽기 전용 seqlock 및 무-VFS RT 검증 | **`OI-DD-02` 조건부 승인안 대기** |
 | `timpani-o/src/schedinfo_service.{h,cpp}` | `TaskInfo.temporal_class` explicit-over-inherit 해석, `RegenerateAllSchedules()` 실패 시 기존 워크로드 모델 안전 롤백 | 기존 API 보존 |
 | `timpani-o/src/global_scheduler.*` | DAG 검증, CBS-only `hyperperiod_us > 0` 보장, `place_tt_slots()`의 `(topo_rank, deadline_us, ...)` + `min_start` L1→L1 순서 보장 및 graph meta 분리 생성 | 기존 API 보존 |
 | `timpani-n/src/main.cpp` | TT/CBS entry와 공통 graph meta 로컬 확인·등록, `ExecutionModel.DATA_FLOW` 거절(`EINVAL`), `TimerMaster::set_schedule_table()` 오버로드로 CBS/Pipeline 메타 전달 | 계층별 가능성 재계산 없음 |
@@ -149,7 +149,7 @@ live SHM object는 수명 동안 고정 크기다. `Timpani-N`은 full-layout ma
   - 읽기 전용 소비자(일반 TT 및 Sink/read-only Successor)는 `O_RDONLY` + `PROT_READ` 매핑으로 `ttsched_wait_data()`와 `ttsched_current_job_token()`을 정상 호출할 수 있으며(읽기 전용 seqlock 사용, `publication_guard` 미기록), `ttsched_signal_ready()` 또는 `ttsched_release_source()` 호출 시에만 `EACCES`를 반환한다.
   - `Timpani-N`만 SHM 생성·`ftruncate()`·`shm_unlink()` 수명 주기를 소유한다. 생산 배포용 `/dev/shm/timpani_ttsched` 권한 모델은 **소유자 UID `timpani-n`(`rw-`) + POSIX ACL/전용 그룹 분리(`g:timpani-pub:rw-`는 신뢰 writer 컨테이너, `g:timpani-sub:r--`는 일반 TT·read-only Successor/Sink 컨테이너, other `---`)** 를 표준으로 한다(ACL 미지원 경량 환경에서는 `0660` + `timpani-pub` 그룹과 컨테이너 마운트/읽기 전용 바인드로 동등한 격리를 적용한다). 기존 PoC의 `0666`은 로컬 회귀 시험 전용으로 한정하며 생산 ABI 계약으로 간주하지 않는다.
   - **Phase 0 trust boundary**: `O_RDWR`/`PROT_WRITE`는 전체 SHM mapping이므로 `timpani-pub` 그룹 구성원은 OS 수준에서 header와 다른 Task slot도 변경할 수 있다. 이 그룹은 상호 신뢰된 cooperative writer만 포함해야 하며, `libttsched`의 자기 slot/세대 검사는 우발적 오용과 corruption 탐지용이지 악의적 writer 격리 또는 memory integrity guarantee가 아니다. 비신뢰 workload는 반드시 `timpani-sub`의 read-only 경로를 사용한다. slot별 capability, per-slot SHM, kernel mediator 기반 강한 격리는 Phase 0 범위가 아니다.
-- 공개 API 시그니처 *(조건부 승인, `OI-DD-02`)*:
+- 공개 API 시그니처 *(조건부 승인안 대기, `OI-DD-02`)*:
   ```c
   void ttsched_init(void);                            /* 기존 시그니처 유지 (실패 원인은 g_shm_init_errno 보존) */
   int ttsched_wait_next_period(void);                 /* 기존 TT API, 변경 없음 */
@@ -1265,7 +1265,7 @@ message TaskInfo {
   // 008 Event-Driven 확장이 사용하는 field 11.
   uint32 min_inter_arrival_us = 11;
   // 008이 Task 단위 override용으로 예약한 field 12.
-  // If absent, inherit SchedInfo.temporal_class.
+  // 명시적 0은 L1 선택; 필드 부재 때만 상속.
   optional TemporalClass temporal_class = 12;
   repeated TaskReference predecessors = 13;
 }
@@ -1292,9 +1292,9 @@ message HierarchicalScheduleTable {
 }
 ```
 
-`TaskInfo` 필드 배정은 `11`/`12`/`13`으로 고정한다. field 11은 008의
-`min_inter_arrival_us`, field 12는 008이 같은 `temporal_class` 의미로
-예약한 위치, field 13은 `predecessors`로 사용한다.
+`TaskInfo` 필드 배정은 `11`/`12`/`13`으로 제안한다. field 11은 008의
+`min_inter_arrival_us`, field 12는 008이 `temporal_class`용으로 예약한 위치,
+field 13은 `predecessors`로 사용한다.
 `HierarchicalScheduleTable.pipeline_tasks = 6` 배정은 유지한다. 이 정합은
 wire 번호 충돌을 해소하며 Task 단위 class override의 Phase 0 도입 승인이나 실제
 schema 반영 승인을 뜻하지 않는다.
@@ -1302,7 +1302,10 @@ schema 반영 승인을 뜻하지 않는다.
 `TaskReference.task_id`는 `TaskInfo.name`(field 1)과 1:1 정확 일치로
 해석한다. `SchedInfo.temporal_class`는 기존 workload 기본값으로 유지한다.
 O는 `TaskInfo.temporal_class`의 presence를 확인해야 하므로 단순 enum
-대신 `proto3 optional`(`protoc >= 3.15`)을 사용한다.
+대신 `proto3 optional`(`protoc >= 3.15`)을 사용한다. 제안하는 presence 규칙은
+008 P2 placeholder `0 = inherit`를 대체한다. 즉 명시적
+`TEMPORAL_PERIODIC = 0`은 L1을 선택하고 필드가 없을 때만 상속하며, 이 의미
+변경은 `CON-DD-05` 승인 대상이다.
 
 Phase 0에서 trigger enum의 유효값은 `PIPELINE_TRIGGER_ALL`뿐이다.
 `node_control.proto`에 기존 정의된 `ExecutionModel.DATA_FLOW = 2`는 wire

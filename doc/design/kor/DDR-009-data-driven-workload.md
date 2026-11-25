@@ -6,10 +6,10 @@ SPDX-License-Identifier: MIT
 # DDR-009: Data-Driven Workload — Phase 0 설계 결정 기록
 
 **작성일:** 2026-10-27  
-**최종 수정:** 2026-11-23 (Phase 0 protobuf 필드 배정 정합)
-**상태:** Draft — Phase 0 조건부 설계 승인 (`OI-DD-01` 구조 승인·008
-필드 `11/12/13` 정합 완료, `OI-DD-02`/`OI-DD-03` 조건부 승인; 구현 완료
-아님)
+**최종 수정:** 2026-11-25 (Phase 0 PR 리뷰 반영)
+**상태:** Draft — Phase 0 설계안, 검토·승인 대기.
+008 필드 `11/12/13`은 정합되었으나 `OI-DD-01`/`02`/`03`은 Project Leader
+승인과 검증 전이며 구현 완료가 아니다.
 **상위 기준:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §9, [SRS-009](SRS-009-data-driven-workload.md)  
 **연계 설계:** [HLD-009](HLD-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -87,7 +87,7 @@ flowchart LR
 ## 4. D-DD-P0-03 — 실행 계층 독립 DAG 및 TT/CBS 실행 어댑터
 
 - **결정**:
-  - `SchedInfo.temporal_class`는 workload 기본값으로 유지한다. `TaskInfo.temporal_class`는 `optional`이며 Task 값이 있으면 이를 사용하고 없으면 workload 기본값을 상속한다. DAG 역할로 계층을 추론하지 않는다. workload는 생명주기·기본 분류를 묶고 Task override는 각 Task의 TT/CBS 실행 계층을 정하는 009 확장이다.
+  - `SchedInfo.temporal_class`는 workload 기본값으로 유지한다. `TaskInfo.temporal_class`는 `optional`이며 Task 값이 있으면 이를 사용하고 필드가 없을 때만 workload 기본값을 상속한다. 따라서 명시적 `TEMPORAL_PERIODIC = 0`은 L1을 선택한다. 이 presence 기반 규칙은 008 P2 placeholder `0 = inherit`를 대체하며 의미 변경 채택은 `CON-DD-05` 승인 대상이다. DAG 역할로 계층을 추론하지 않는다. workload는 생명주기·기본 분류를 묶고 Task override는 각 Task의 TT/CBS 실행 계층을 정하는 009 확장이다.
   - 선행은 `TaskReference(workload_id, task_id)`로 전달한다. 빈 `workload_id`는 현재 workload를 뜻하며 Phase 0에는 같은 workload 내부 참조만 허용한다. `predecessors`와 `trigger_mode=ALL`은 실행 계층을 결정하지 않는다.
   - O는 resolved class에 따라 기존 `TtSlot` 또는 `CbsConfig`를 생성한다. 공통 DAG 메타는 실행 표현과 분리해 `PipelineTaskKey(workload_id_hash, task_id_hash)` 쌍으로 O→N에 전달한다. `node_control.proto`의 기존 `ExecutionModel.DATA_FLOW = 2`는 와이어 호환 보존을 위해 enum에 유지하되 Phase 0에서는 미사용(O 미발행, N 수신 시 `EINVAL` 거절)으로 고정한다.
   - Source도 L1 TT 또는 L2 CBS일 수 있다. L1 Source는 `Timer Master`가 `start()` 시점에 모든 CPU 스레드가 공유하는 단일 `base_cycle_start`를 확정하고 각 Source의 파이프라인 주기 단위 activation ordinal `k`(`0, 1, 2, ...`, 슬롯 발화마다 `+1`)를 stamp한 뒤 기존 `tasks[i].counter` wake를 수행한다. L2 CBS Source는 `Timpani-N`에 별도 L2 release 데몬/IPC를 신설하지 않고, `O_RDWR`(`timpani-pub`) 권한의 이벤트 어댑터/시험 생성기가 `ttsched_release_source(task_name, k)`(`execution_model == TIMPANI_EXEC_CBS` 강제 검증)로 `k`를 stamp한 뒤 기존 이벤트 경로로 Task를 깨운다. 두 Source 모두 활성화 직후 `ttsched_current_job_token(&token)`으로 stamp된 `k`를 고정하고 완료 시 동일 `ttsched_signal_ready(k)` API를 호출한다.
@@ -108,7 +108,7 @@ flowchart LR
 ## 5. D-DD-P0-04 — `DDR-011` Phase 0 안정 게시(`magic`, 짝수 `generation`) 준수 및 제어 wake 분리
 
 - **결정**:
-  - Pipeline client는 기존 `void ttsched_init(void)` 시그니처를 유지하되 `g_shm_init_errno`와 전체 TLS 일괄 리셋으로 오류 원인(`EINVAL` vs `ENOTSUP`)과 double-`munmap` 방지를 보장하며, 비RT 초기화 경로에서 1회 `fstat()`로 SHM 객체 크기를 확인해 `g_shm_map_size`·`g_shm_pipeline_capable`을 설정하고 `mmap()` 직후 SHM fd를 즉시 닫는다(스레드 종료 시 `pthread_key` destructor로 `munmap`). RT critical path(`release_source`, `signal_ready`, `wait_data`, `current_job_token`, `Timer Master`)에서는 `shm_open`/`fstat`/`close`를 호출하지 않고 순수 사용자 공간 원자 로드(`g_shm_pipeline_capable`, `publication_guard`의 `WRITER_PENDING`, `shm->magic`, 짝수 `generation`, `pipeline_header.{magic, abi_version, abi_size, instance_id}`)와 16바이트 원자 이름 비교(`atomic_name_equals`, 게시자 `atomic_name_store`)만으로 ABI·세대·신원·교체/무효화를 검증한다. 최초 유효 세대 바인딩(`g_shm_generation == 0U`) 이후 `gen != g_shm_generation`이 관측되면 3개 소비자/신호 API 모두 새 세대를 암묵 채택하지 않고 즉시 `ESTALE`을 반환한다. 게시자는 live object마다 전체 ABI 크기(`3,128`B)를 고정 유지(no-shrink)하고, 교체·종료는 `WRITER_PENDING` 유지 + active commit drain + `magic=0`/`pipeline_header.magic=0` 무효화 + `tasks[i].counter` 및 `pipeline[i].dispatch_counter` 전체 `FUTEX_WAKE(..., INT_MAX)` + truncate/in-place 덮어쓰기 없는 `shm_unlink()` + `O_CREAT|O_EXCL` 신규 `instance_id` 객체 생성으로 수행한다.
+  - Pipeline client는 기존 `void ttsched_init(void)` 시그니처를 유지하되 `g_shm_init_errno`와 전체 TLS 일괄 리셋으로 오류 원인(`EINVAL` vs `ENOTSUP`)과 double-`munmap` 방지를 보장하며, 비RT 초기화 경로에서 1회 `fstat()`로 SHM 객체 크기를 확인해 `g_shm_map_size`·`g_shm_pipeline_capable`을 설정하고 `mmap()` 직후 SHM fd를 즉시 닫는다(스레드 종료 시 `pthread_key` destructor로 `munmap`). RT critical path(`release_source`, `signal_ready`, `wait_data`, `current_job_token`, `Timer Master`)에서는 `shm_open`/`fstat`/`close`를 호출하지 않고 순수 사용자 공간 원자 로드(`g_shm_pipeline_capable`, `publication_guard`의 `WRITER_PENDING`, `shm->magic`, 짝수 `generation`, `pipeline_header.{magic, abi_version, abi_size, instance_id}`)와 16바이트 원자 이름 비교(`atomic_name_equals`, 게시자 `atomic_name_store`)만으로 ABI·세대·신원·교체/무효화를 검증한다. 최초 유효 세대 바인딩(`g_shm_generation == 0U`) 이후 `gen != g_shm_generation`이 관측되면 4개 Pipeline API(`release_source`, `current_job_token`, `wait_data`, `signal_ready`) 모두 새 세대를 암묵 채택하지 않고 즉시 `ESTALE`을 반환한다. 게시자는 live object마다 전체 ABI 크기(`3,128`B)를 고정 유지(no-shrink)하고, 교체·종료는 `WRITER_PENDING` 유지 + active commit drain + `magic=0`/`pipeline_header.magic=0` 무효화 + `tasks[i].counter` 및 `pipeline[i].dispatch_counter` 전체 `FUTEX_WAKE(..., INT_MAX)` + truncate/in-place 덮어쓰기 없는 `shm_unlink()` + `O_CREAT|O_EXCL` 신규 `instance_id` 객체 생성으로 수행한다.
   - 게시자는 `pipeline_header.publication_guard`의 `WRITER_PENDING` 비트를 설정해 새 쓰기 commit을 막고, active commit이 `0`이 될 때까지 제한된 시간(`effective_pub_drain_timeout_us(H) = min(5 ms, H/4)`, 연속 이연 상한 `2`회; 종료/교체 시 `TIMPANI_PUB_SHUTDOWN_DRAIN_MS = 50 ms`)만 대기한다. `50 ms` 초과 시 **Safe Abandonment**(잔여 카운트 경고 로그 → `WRITER_PENDING` 유지·`magic=0`/`pipeline_header.magic=0` → `tasks[]`/`pipeline[]` `FUTEX_WAKE(..., INT_MAX)` → `ftruncate`/덮어쓰기 금지 → `shm_unlink`)으로 강제 무효화한다. 정상 게시 시 `pipeline_header`는 `publication_guard`를 덮어쓰지 않도록 필드별 release-store로 기록하며, 순서는 `magic=0 → pipeline_header.magic=0 → 홀수 generation → 내용 갱신(이름은 atomic_name_store) → pipeline_header 필드별 release-store(abi/instance_id/origin_epoch_ns/hyperperiod_us/magic) → 짝수 generation → shm->magic=유효 → WRITER_PENDING 해제`다.
   - 이미 `publication_guard`를 획득해 `active_count`에 포함된 in-flight writer의 각 CAS/wake 직전 재검증은 `WRITER_PENDING`을 제외하고 `shm->magic`·`pipeline_header.magic`·`generation`·`instance_id`만 확인하는 `pipeline_commit_alive()`를 사용한다. 이로써 정상 drain(`WRITER_PENDING=1`)이 진행되는 동안에도 진입 완료된 writer는 진행 중인 commit과 `dispatch_counter++`/wake를 온전히 마친 뒤 `pipeline_commit_exit()`로 drain을 정상 종료하며 Lost Wakeup이나 부분 fan-out을 남기지 않는다.
   - Safe Abandonment는 active writer를 강제 취소하는 fencing이 아니다. timeout 후 구 SHM에 진입한 writer가 resume될 수 있으므로 각 CAS/wake 직전 `pipeline_commit_alive()`로 `magic=0`/세대/`instance_id` 변경을 재검사하되, 마지막 검사 직후 race에서 구 object late CAS/wake가 남을 수 있음을 허용한다. `magic=0` + `unlink` + 새 `instance_id` object 생성으로 그 late operation을 active generation에서 격리하며, 구 mapping consumer는 wake 후 stable-state 재검증에서 `ESTALE`로 중단한다. 무효화 전에 이미 token을 반환받아 실행 중인 Job은 취소하지 않는다. publisher 종료/교체 없이 상시 발생한 writer-count 누수는 자동 Safe Abandonment trigger가 아니라 Phase 2 recovery 대상이다.
@@ -135,8 +135,8 @@ flowchart LR
 - **Phase 1**: `Activation Window`, Harmonic 주기, L1/L2 혼합 DAG `E2E` 분석, 정상 갱신, SHM 버전 관리.
 - **Phase 2**: `SKIP`, 최초 원인 `DATA_TIMEOUT`, Sink Fallback, 계층 공통 복구 상태 초기화.
 - **Phase 0 검토 게이트**:
-  1. `OI-DD-01`(구조 승인 완료; 008 필드 배정 `11/12/13` 정합 완료) 및
-     `OI-DD-02`/`OI-DD-03` 조건부 검증 시험 통과
+  1. `OI-DD-01`(008 필드 배정 `11/12/13` 정합 및 field 12 의미 변경)을
+     Project Leader가 승인하고 `OI-DD-02`/`OI-DD-03` 조건부 검증 시험 통과
   2. Source/Successor와 L1/L2를 독립적으로 표현해 공통 SHM 그래프에 연결
   3. L1 Successor가 TT gate, L2 Successor가 CBS gate를 준수
   4. TT→TT, TT→CBS, CBS→TT, CBS→CBS 최소 조합 검증

@@ -6,11 +6,11 @@ SPDX-License-Identifier: MIT
 # HLD-009: Data-Driven Workload — Phase 0 High-Level Architecture Design
 
 **Date:** 2026-10-27
-**Last Updated:** 2026-11-23 (Phase 0 protobuf field-allocation alignment)
-**Status:** Draft — Conditional Phase 0 design approval (`OI-DD-01`
-structural approval with 008 field allocation `11/12/13` aligned;
-`OI-DD-02`/`OI-DD-03` conditionally approved; not a declaration that the
-current implementation satisfies it)
+**Last Updated:** 2026-11-25 (Phase 0 PR review remediations)
+**Status:** Draft — Phase 0 design proposal; review and approval pending.
+The 008 field allocation `11/12/13` is aligned, but `OI-DD-01`/`02`/`03`
+remain subject to Project Leader approval and verification; this is not a
+declaration that the current implementation satisfies the design.
 **Parent Baseline:** [REQ-009](REQ-009-data-driven-workload.md) §1.5, §7.1, §8.2, [SRS-009](SRS-009-data-driven-workload.md)
 **Decisions / Details:** [DDR-009](DDR-009-data-driven-workload.md), [LLD-009](LLD-009-data-driven-workload.md), [DDR-011](DDR-011-runtime-table-update.md)
 
@@ -74,7 +74,7 @@ Common DAG metadata transmission, the backward SHM `pipeline[]`, and new APIs ar
 
 ### 3.1 H-DD-P0-01 — Offline Candidate Validation and Deterministic Topological Placement (`Timpani-O`)
 
-O prioritizes an explicit `TaskInfo.temporal_class` and otherwise inherits `SchedInfo.temporal_class` to determine each Task's execution layer. It converts the predecessor list `TaskReference(workload_id, task_id)` into normalized Task identifiers in the same workload, validates the DAG, and creates common dependency metadata by `(workload_id_hash, task_id_hash)` key. Each Task retains the existing `TtSlot` or `CbsConfig` representation according to its resolved class, and its execution layer is not inferred from whether `predecessors` is present.
+O uses an explicit `TaskInfo.temporal_class` and otherwise inherits `SchedInfo.temporal_class` only when the optional field is absent. Explicit `TEMPORAL_PERIODIC = 0` selects L1; this supersedes the 008 placeholder `0 = inherit` and remains subject to `CON-DD-05` approval. It converts the predecessor list `TaskReference(workload_id, task_id)` into normalized Task identifiers in the same workload, validates the DAG, and creates common dependency metadata by `(workload_id_hash, task_id_hash)` key. Each Task retains the existing `TtSlot` or `CbsConfig` representation according to its resolved class, and its execution layer is not inferred from whether `predecessors` is present.
 
 Phase 0 permits only same-workload references and `ALL` and uses the existing TT slot/CBS admission policy. Phase 1 extends cross-workload references, aggregation of per-layer response times for a mixed DAG, `E2E`, and Window/Gap conditions. On failure, the committed model is retained.
 
