@@ -74,6 +74,12 @@ TIMPANI Phase 2는 **Partial BPF Scheduler** (`SCX_OPS_SWITCH_PARTIAL` 모드)�
 
 ## sched_ext 기본 개념
 
+### 2026-11-12 Weekly 실행 환경·슬롯 종료 보충 (검토용)
+
+[회의와 후속 답변](https://github.com/eclipse-timpani/timpani26/discussions/4)에 따라 TT 슬롯 시작 요청과 슬롯 종료 강제를 구분한다. 본문의 Timer Master/BPF 스케치는 종료 집행이 검증되었다는 의미가 아니다. 시간 경계 요구와 검증은 [DDR-007 §4.3.1](DDR-007-tt-cbs-integrated-scheduling.md#431-tt-슬롯-종료-강제--2026-11-12-weekly-후속-설계)이 주관하고, 실제 종료 유발·TT 재디스패치 차단·미완료 인스턴스 처리는 본 DDR의 후속 상세 설계 지점이다. 구체 BPF API·타이머·선점 지연은 아직 확정하지 않는다.
+
+CBS는 SCHED_EXT 내부 서버이며 Linux SCHED_DEADLINE 태스크가 아니다. SCHED_FIFO Timer Master도 DEADLINE 계층 및 대상 커널의 fair server(`dl_server`) 간섭을 받을 수 있다. 회의에서 보고된 성능 관측은 커널·설정별 재현 대상으로 기록하며, 모든 플랫폼의 원인으로 일반화하거나 SCHED_DEADLINE 전환을 해법으로 확정하지 않는다. Timer Master·Replenisher·DeadlineMonitor의 지터를 해당 부하 아래 측정하고 DDR-006의 RT 경로 분리를 유지한다. 새 우선순위·정책·커널 설정 변경은 별도 검토 대상이다.
+
 ```
 sched_ext (SCX): Linux 6.12+ 정식 merge
   → BPF 프로그램으로 커널 스케줄러 동작을 완전 교체

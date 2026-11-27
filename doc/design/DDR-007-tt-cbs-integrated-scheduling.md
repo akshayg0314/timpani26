@@ -9,13 +9,15 @@ SPDX-License-Identifier: MIT
 **Status:** Proposal
 **Authors:** Human (Lead Architect) + AI
 
+> **2026-11-13 Supplement:** The requirement for TT slot-end enforcement from [Weekly 2026-11-12](https://github.com/eclipse-timpani/timpani26/discussions/4) is managed in §4.3.1. The TT_END in the existing §4.3 is a target design sketch, and it is not evidence that the current implementation enforces slot termination. Before that verification, the determinism and FFI in §8~9 are conditional statements that TT runs within the declared range. For the CBS Event/Job contract, see the separate revision proposal of [DDR-008](DDR-008-event-driven-workload-support.md).
+
 ---
 
 ## 0. Scope and Prerequisites
 
 This document **assumes** the following decisions established in
 [DDR-001](DDR-001-workload-model.md) ~ [DDR-006](DDR-006-communication-architecture.md)
-and [HSF-concept](HSF-concept.md).
+and HSF-concept (a document not in this repository).
 
 | Prerequisite | Source |
 |:--|:--|
@@ -562,6 +564,31 @@ void TimerMaster::run(const ScheduleTable& table)
     }
 }
 ```
+
+### 4.3.1 TT Slot-End Enforcement — 2026-11-12 Weekly Follow-up Design
+
+**Status:** Requirement direction reflected / concrete mechanism, numbers, and execution policy not fixed / not implemented, not verified. The [meeting follow-up answer](https://github.com/eclipse-timpani/timpani26/discussions/4) states that there is only a request for execution at the slot start, and that the current slot end is not enforced. The TT_END map update and kick pseudocode above are not interpreted as completed enforcement.
+
+**Owner and scope:** This DDR leads the time partitioning of TT and CBS and the protection of the next task. Event/Job deadline monitoring is the role of DDR-008 and does not define means of blocking TT execution. The end of a TT slot and the relative deadline of a task are not the same concept, so each is determined separately.
+
+**Required contract (proposal)**
+1. Define execution-eligibility revocation and re-dispatch rules so that TT overrun after the end of the reserved slot does not encroach on the next TT or the CBS Gap. Distinguish and measure the times of termination detection, preemption request, and actual CPU release, and the allowed overrun time. Do not assume a guarantee of zero or one tick.
+2. Whether to hold, discard, or resume in the next slot an unfinished TT that has passed its slot, and how to distinguish the previous instance from the new release, is a separate policy decision. Do not arbitrarily terminate a process or convert the remaining execution to CBS.
+3. If the end of an adjacent slot and the start of the next are at the same time, define a deterministic order and instance identification so that the termination processing of the previous slot does not erase the authority of the next slot. Apply this to multiple CPUs, hyperperiod wrap, and delayed control events as well.
+4. Record separately the fact that the slot-end action was delayed, the TT overrun execution, and the deadline misses of the affected TT/L2. Do not apply automatic attribution to an L2 that missed its deadline because of TT interference (DDR-012 §4.4, DDR-008 D-23).
+5. Do not claim that SCHED_FIFO alone for the Timer Master prevents interference from Linux SCHED_DEADLINE or the fair server (`dl_server`). After checking the scheduling layers and configuration of the target kernel and the control-thread latency, fix the enforcement means and the scope of the guarantee.
+
+| Detailed reflection point | Follow-up design content |
+|:--|:--|
+| This DDR §2.1, §4.3~4.4, §8~9 | Time-boundary contract, protection of adjacent TT/CBS, conditional guarantee and measurable allowed delay |
+| [DDR-005](DDR-005-sched-ext-bpf-scheduler.md) Timer Master·BPF ops | Actual means of triggering termination, execution-eligibility check, reinsertion of overrunning TT, control-delay measurement. Concrete API and timer are pending approval |
+| [DDR-011 §5](DDR-011-runtime-table-update.md#5-d-p0-04--resident-timer-and-tt-free-handover) · [§10](DDR-011-runtime-table-update.md#10-deferrals-and-review-gate) | Based on the TT-free handover of Phase 0 (switching after the old TT slots on all isolated CPUs are complete), the rule that an old slot end does not act on a new slot when termination enforcement is added. CBS-only transition is in the DDR-011 Phase 1 scope |
+| [DDR-012 §4.4](DDR-012-fault-management.md#44-2026-11-12-weekly-follow-up--separating-affected-task-and-causing-task-for-review) | Distinction and recovery policy for TT overrun, control delay, and affected-task failure |
+| [DDR-006 §4](DDR-006-communication-architecture.md#4-c-rework-architecture) | Placement of control threads, scheduling layers, and communication separation of the RT path |
+
+**Phase determination (scope decision of the Project Leader (author) during design review, see DDR-008 §3.5 for the basis): P2.** The concretization and verification of the TT slot range, termination enforcement, and unfinished-TT policy are separated from DDR-008 P1, the basic Event/Job environment. P1 can complete the basic execution and observation environment under CBS-only and the assumption of normal TT execution. However, time isolation and determinism guarantees, including TT overrun, are not claimed before P2 enforcement verification. This is a precondition for strong guarantees, not a blocking condition for completing the basic P1 environment.
+
+**Verification plan (not executed):** Includes other TTs and CBS after a TT with unbounded execution or preemption delay, adjacent slots, CPU idle, hyperperiod wrap, table deletion and replacement with old termination events, and DEADLINE/fair-server load. After the required upper bound and mechanism are fixed, it is checked on the Linux target.
 
 ### 4.4 BPF ops Implementation — Integrated Dispatch
 

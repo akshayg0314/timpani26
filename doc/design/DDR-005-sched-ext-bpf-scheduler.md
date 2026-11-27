@@ -74,6 +74,12 @@ TIMPANI Phase 2 operates as a **Partial BPF Scheduler** (`SCX_OPS_SWITCH_PARTIAL
 
 ## sched_ext Basic Concepts
 
+### 2026-11-12 Weekly Execution Environment and Slot-End Supplement (for review)
+
+Following the [meeting and follow-up answers](https://github.com/eclipse-timpani/timpani26/discussions/4), this DDR distinguishes the TT slot start request from the enforcement of slot termination. The Timer Master/BPF sketch in the body does not mean that termination enforcement has been verified. The time-boundary requirements and verification are led by [DDR-007 §4.3.1](DDR-007-tt-cbs-integrated-scheduling.md#431-tt-slot-end-enforcement--2026-11-12-weekly-follow-up-design), and the actual termination trigger, blocking of TT re-dispatch, and handling of unfinished instances are follow-up detailed design points of this DDR. The concrete BPF API, timer, and preemption latency are not yet fixed.
+
+CBS is an internal server of SCHED_EXT, and it is not a Linux SCHED_DEADLINE task. The SCHED_FIFO Timer Master can also be affected by interference from the DEADLINE layer and the fair server (`dl_server`) of the target kernel. The performance observations reported in the meeting are recorded as targets for reproduction per kernel and configuration. They are not generalized as the cause on all platforms, and a switch to SCHED_DEADLINE is not fixed as the solution. The jitter of Timer Master, Replenisher, and DeadlineMonitor is measured under that load, and the separation of the RT path in DDR-006 is kept. New priority, policy, or kernel configuration changes are subject to separate review.
+
 ```
 sched_ext (SCX): officially merged in Linux 6.12+
   → Completely replaces kernel scheduler behavior with a BPF program

@@ -12,6 +12,8 @@ SPDX-License-Identifier: Apache-2.0
 **Author:** Jaehyun Kim  
 **Related:** DDR-002 (Scheduling Architecture), DDR-003 (Interface / Protocol), DDR-006 (Communication Architecture), DDR-011 (Runtime Table Update)
 
+> **Status scope supplement (2026-11-13):** The new §4.4 is a **proposal for review** from the Weekly 2026-11-12 follow-up. It is not covered by the Approved / Implemented notation above. The existing implementation status and the agreement on the new cause and recovery policy are distinguished.
+
 ---
 
 ## 1. Overview
@@ -135,6 +137,18 @@ $$
 $$
 
 Misses at or below threshold are treated as tolerated jitter and do not emit `FaultInfo`.
+
+---
+
+### 4.4 2026-11-12 Weekly Follow-up — Separating Affected Task and Causing Task (for review)
+
+**Status:** This is a policy review requirement that reflects the [meeting follow-up answer](https://github.com/eclipse-timpani/timpani26/discussions/4). The Approved / Implemented status in the document header does not apply to this new section. It does not mean that cause analysis or a recovery policy has been implemented or approved yet.
+
+- Even if CBS misses its deadline because of TT overrun execution, the **fact** of the CBS deadline miss is recorded. The failed task and the task or platform that provided the cause are distinguished, and the policy is set in a direction that does not automatically conclude that CBS itself has a fault and penalize it.
+- **Phase distinction (scope decision of the Project Leader (author) during design review, see DDR-008 §3.5 for the basis):** P1 implements the common Event/Job execution environment and deadline-miss detection, counting, and basic reporting. Existing observation information is kept, but TT interference cause analysis, new control-delay measurement, and cause-aware recovery are not added to the P1 completion criteria. The threshold excess in the existing §4.3 is a reporting condition, not a rule for confirming the cause.
+- **P2 decision:** The notification for the case where the threshold is exceeded with the cause unconfirmed or with evidence of TT interference, and the handling of RESTART/STOP, are designed together with the distinction between the affected task and the causing task. Causality is not confirmed by simultaneous observation of TT overrun and budget exhaustion alone. The agreement on the scope and latency of basic P1 reporting is kept, and this section does not arbitrarily disable the existing recovery or add a new FaultAction.
+- Cause classification, multi-cause analysis, and cause-specific recovery selection are **P2**, and their scope is traced in [DDR-008 D-23](DDR-008-event-driven-workload-support.md#d-23-separation-of-the-deadline-failure-fact-from-cause-and-recovery-policy--p2). The TT boundary enforcement itself is the responsibility of [DDR-007 §4.3.1](DDR-007-tt-cbs-integrated-scheduling.md#431-tt-slot-end-enforcement--2026-11-12-weekly-follow-up-design) and DDR-005 in P2.
+- **Verification (not run):** Distinguish normal TT and self-overrunning CBS, affected CBS by overrunning TT, Timer Master delay, and cases where multiple causes overlap. Confirm that the unconfirmed cause state is expressed without hiding observation failures, and that recovery is not applied to the wrong task. Proto changes are subject to separate approval.
 
 ---
 
