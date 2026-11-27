@@ -79,12 +79,22 @@ run (`workflow_dispatch`) runs everything.
 | `timpani-o/` | `run-timpani-o-ci.yml` | build + `ctest` (amd64, arm64), ASan/UBSan, gcovr coverage, image build check |
 | `libtrpc/`, `sample-apps/` | `run-native-libs-ci.yml` | CMake build (amd64, arm64) |
 | any C/C++ | `run-cpp-lint.yml` | clang-format (changed lines only), cppcheck |
-| `**/*.md` | `run-doc.yml` | markdownlint |
-| `.github/workflows/` | `run-validate.yml` | YAML validation |
+| `**/*.md` | `run-doc.yml` | markdownlint (report only, uploaded as an artifact) |
+| `.github/workflows/` | `run-validate.yml` | actionlint (syntax, job graph, expressions, action inputs, shellcheck) |
 
 The final `CI Complete Summary` job fails if any triggered job failed or was
-cancelled. Configure it as the required status check in the branch protection
-rules of `develop_1.0` and `main` so that a failing pipeline blocks merging.
+cancelled, or if change detection itself failed. Configure it as the required
+status check in the branch protection rules of `develop_1.0` and `main` so that
+a failing pipeline blocks merging.
+
+Workflow conventions: every job sets `timeout-minutes`, workflows use the least
+permissions they need (`contents: read` by default), and action versions are
+kept on current majors that run on Node 24. Run `actionlint` locally before
+pushing workflow changes:
+
+```bash
+docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:1.7.12
+```
 
 ### Scripts layout
 

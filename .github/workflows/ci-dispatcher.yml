@@ -32,6 +32,7 @@ jobs:
   #  Job 1: Detect file changes and conditionally trigger jobs based on them
   detect-changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       rust_changed: ${{ steps.filter.outputs.rust }}                # Rust workspace
       timpani_o_changed: ${{ steps.filter.outputs.timpani_o }}      # timpani-o (C++)
@@ -45,7 +46,7 @@ jobs:
 
       # Step 2: Use `dorny/paths-filter` to detect what kinds of files changed
       - id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             rust:
@@ -112,13 +113,17 @@ jobs:
     uses: ./.github/workflows/run-validate.yml
 
   #  Job 8: Always run last. Fails if any triggered job failed or was
-  #  cancelled; skipped jobs (nothing changed) are fine. Use this job as the
-  #  single required status check in branch protection.
+  #  cancelled; skipped jobs (nothing changed) are fine. detect-changes is
+  #  included so that a failed change detection (which skips every other job)
+  #  cannot produce a green summary. Use this job as the single required
+  #  status check in branch protection.
   ci-summary:
     name: CI Complete Summary
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: always()
     needs:
+      - detect-changes
       - run-rust-ci
       - run-timpani-o-ci
       - run-native-libs-ci
