@@ -5,7 +5,7 @@ on:
   workflow_dispatch: 
 
 permissions:
-  packages: write
+  contents: read
 
 env:
   ContainerRegistry: ghcr.io
@@ -25,10 +25,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Make scripts executable
-        run: chmod +x scripts/*.sh
+        run: chmod +x scripts/rust/*.sh
 
       - name: Install project dependencies
-        run: ./scripts/installdeps.sh
+        run: ./scripts/rust/installdeps.sh
 
       - name: Create output folders
         run: |
@@ -39,22 +39,22 @@ jobs:
           mkdir -p dist/reports/clippy
 
       - name: Build and parse project
-        run: ./scripts/buildNparse.sh
+        run: ./scripts/rust/buildNparse.sh
 
       - name: Run tests and generate report
-        run: ./scripts/testNparse.sh
+        run: ./scripts/rust/testNparse.sh
 
       - name: Run Clippy (lint)
-        run: ./scripts/clippy_check.sh
+        run: ./scripts/rust/clippy_check.sh
 
       - name: Run format check
-        run: ./scripts/fmt_check.sh
+        run: ./scripts/rust/fmt_check.sh
 
       - name: Run cargo-deny checks
-        run: ./scripts/deny_check.sh
+        run: ./scripts/rust/deny_check.sh
 
       - name: Run test coverage script
-        run: ./scripts/test_coverage.sh
+        run: ./scripts/rust/test_coverage.sh
 
       - name: Upload deny report
         if: always()
